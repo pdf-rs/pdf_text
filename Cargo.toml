@@ -1,0 +1,21 @@
+[package]
+name = "pdf_cluster"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pdf = { git = "https://github.com/pdf-rs/pdf", features = ["cache"] }
+pdf_render = { git = "https://github.com/pdf-rs/pdf_render" }
+font = { git = "https://github.com/pdf-rs/font" }
+itertools = "*"
+log = "*"
+ordered-float = "*"
+serde = { version = "*", features = ["derive"] }
+unicode-normalization = "0.1.19"
+
+pathfinder_geometry = { git = "https://github.com/servo/pathfinder" }
+pathfinder_color = { git = "https://github.com/servo/pathfinder" }
+pathfinder_content = { git = "https://github.com/servo/pathfinder" }
+table = { git = "https://github.com/s3bk/table", features = ["serde"] }

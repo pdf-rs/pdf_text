@@ -1,7 +1,11 @@
 [package]
-name = "pdf_cluster"
+name = "pdf_text"
 version = "0.1.0"
 edition = "2021"
+authors = ["Sebastian Köln <s3bk@protonmail.com>"]"
+keywords = ["pdf", "text", "extract"]
+license = "MIT"
+description = "PDF text extraction"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

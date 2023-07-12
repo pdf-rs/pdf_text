@@ -2,7 +2,7 @@
 name = "pdf_text"
 version = "0.1.0"
 edition = "2021"
-authors = ["Sebastian Köln <s3bk@protonmail.com>"]"
+authors = ["Sebastian Köln <s3bk@protonmail.com>"]
 keywords = ["pdf", "text", "extract"]
 license = "MIT"
 description = "PDF text extraction"

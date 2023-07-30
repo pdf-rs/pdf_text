@@ -9,12 +9,12 @@ mod util;
 mod text;
 pub mod entry;
 
-pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page) -> Result<Flow, PdfError> {
+pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve) -> Result<Flow, PdfError> {
     let cache = TraceCache::new();
 
     let mut tracer = Tracer::new(&cache);
 
-    render_page(&mut tracer, file, &page, Default::default())?;
+    render_page(&mut tracer, resolve, &page, Default::default())?;
 
     let bbox = tracer.view_box();
 
@@ -60,7 +60,7 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page) -> Result<F
     };
 
     for &p in patterns.iter() {
-        let pattern = match file.get(p) {
+        let pattern = match resolve.get(p) {
             Ok(p) => p,
             Err(e) => {
                 log::warn!("failed to load pattern: {:?}", e);
@@ -69,7 +69,7 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page) -> Result<F
         };
         let mut pat_tracer = Tracer::new(&cache);
 
-        render_pattern(&mut pat_tracer, &*pattern, file)?;
+        render_pattern(&mut pat_tracer, &*pattern, resolve)?;
         let pat_items = pat_tracer.finish();
         for item in pat_items {
             visit_item(item);

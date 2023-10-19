@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use entry::Flow;
 use pdf::{backend::Backend, object::{Page, Resolve}, PdfError};
-use pdf_render::{tracer::{TraceCache, Tracer, DrawItem}, Fill, render_pattern, render_page};
+use pdf_render::{tracer::{TraceCache, Tracer, DrawItem}, Fill, render_pattern, render_page, FillMode};
 
 mod tree;
 mod util;
@@ -12,7 +12,8 @@ pub mod entry;
 pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve) -> Result<Flow, PdfError> {
     let cache = TraceCache::new();
 
-    let mut tracer = Tracer::new(&cache);
+    let mut clip_paths = vec![];
+    let mut tracer = Tracer::new(&cache, &mut clip_paths);
 
     render_page(&mut tracer, resolve, &page, Default::default())?;
 
@@ -22,10 +23,10 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
     let mut patterns = HashSet::new();
     for item in items.iter() {
         if let DrawItem::Vector(ref v) = item {
-            if let Some((Fill::Pattern(id), _)) = v.fill {
+            if let Some(FillMode { color: Fill::Pattern(id), .. }) = v.fill {
                 patterns.insert(id);
             }
-            if let Some((Fill::Pattern(id), _, _)) = v.stroke {
+            if let Some((FillMode { color: Fill::Pattern(id), .. }, _)) = v.stroke {
                 patterns.insert(id);
             }
         }
@@ -35,7 +36,7 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
     let mut lines = vec![];
     let mut visit_item = |item| {
         match item {
-            DrawItem::Text(t) if bbox.intersects(t.rect) => {
+            DrawItem::Text(t, _) if bbox.intersects(t.rect) => {
                 spans.push(t);
             }
             DrawItem::Vector(path) if bbox.intersects(path.outline.bounds()) => {
@@ -67,7 +68,7 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
                 continue;
             }
         };
-        let mut pat_tracer = Tracer::new(&cache);
+        let mut pat_tracer = Tracer::new(&cache, &mut clip_paths);
 
         render_pattern(&mut pat_tracer, &*pattern, resolve)?;
         let pat_items = pat_tracer.finish();

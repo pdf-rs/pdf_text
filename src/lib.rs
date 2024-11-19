@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use entry::Flow;
 use pdf::{backend::Backend, object::{Page, Resolve}, PdfError};
-use pdf_render::{tracer::{TraceCache, Tracer, DrawItem}, Fill, render_pattern, render_page, FillMode};
+use pdf_render::{tracer::{TraceCache, Tracer, DrawItem}, Fill, render_pattern, render_page, FillMode, font::OutlineBuilder};
 
 mod tree;
 mod util;
@@ -10,10 +10,10 @@ mod text;
 pub mod entry;
 
 pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve) -> Result<Flow, PdfError> {
-    let cache = TraceCache::new();
+    let mut cache = TraceCache::new(OutlineBuilder::default());
 
     let mut clip_paths = vec![];
-    let mut tracer = Tracer::new(&cache, &mut clip_paths);
+    let mut tracer = Tracer::new(&mut cache, &mut clip_paths);
 
     render_page(&mut tracer, resolve, &page, Default::default())?;
 
@@ -68,7 +68,7 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
                 continue;
             }
         };
-        let mut pat_tracer = Tracer::new(&cache, &mut clip_paths);
+        let mut pat_tracer = Tracer::new(&mut cache, &mut clip_paths);
 
         render_pattern(&mut pat_tracer, &*pattern, resolve)?;
         let pat_items = pat_tracer.finish();

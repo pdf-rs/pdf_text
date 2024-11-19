@@ -1,10 +1,11 @@
+use font::Encoder;
 use pathfinder_geometry::vector::Vector2F;
 use pdf_render::TextSpan;
 use itertools::{Itertools};
 use unicode_normalization::UnicodeNormalization;
 use crate::{util::avg, entry::Word, util::Rect};
 
-pub fn concat_text<'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan> + Clone) -> Vec<Word> {
+pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan<E>> + Clone) -> Vec<Word> {
     let mut words = vec![];
     let gaps = items.clone()
         .flat_map(|s| {

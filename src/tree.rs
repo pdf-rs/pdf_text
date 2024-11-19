@@ -16,8 +16,9 @@ use crate::util::{is_number, avg, CellContent};
 use crate::text::{concat_text};
 use std::mem::take;
 use table::Table;
+use font::{Encoder, Glyph};
 
-pub fn build(spans: &[TextSpan], bbox: RectF, lines: &[[f32; 4]]) -> Node {
+pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]]) -> Node {
     if spans.len() == 0 {
         return Node::singleton(&[]);
     }
@@ -180,7 +181,7 @@ impl Span {
     }
 }
 
-pub fn split2(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines_info: &Lines) -> Node {
+pub fn split2<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines_info: &Lines) -> Node {
     use std::mem::replace;
 
     #[derive(Debug)]
@@ -383,7 +384,7 @@ pub enum NodeTag {
     Complex,
 }
 
-pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32) {
+pub fn items<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node: &Node, x_anchor: f32) {
     match *node {
         Node::Final { ref indices } => {
             if indices.len() > 0 {
@@ -534,10 +535,10 @@ pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32
 }
 
 
-pub fn render(w: &mut String, spans: &[TextSpan], node: &Node, bbox: RectF) {
+pub fn render<E: Encoder>(w: &mut String, spans: &[TextSpan<E>], node: &Node, bbox: RectF) {
     _render(w, spans, node, bbox, 0)
 }
-fn _render(w: &mut String, spans: &[TextSpan], node: &Node, bbox: RectF, level: usize) {
+fn _render<E: Encoder>(w: &mut String, spans: &[TextSpan<E>], node: &Node, bbox: RectF, level: usize) {
     use std::fmt::Write;
 
     match *node {
@@ -596,7 +597,7 @@ fn _render(w: &mut String, spans: &[TextSpan], node: &Node, bbox: RectF, level: 
     }
 }
 
-fn split(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines: &Lines) -> Node {
+fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines: &Lines) -> Node {
     let num_boxes = boxes.len();
     if num_boxes < 2 {
         return Node::singleton(boxes);
@@ -925,13 +926,13 @@ impl TriCount {
         }
     }
 }
-fn classify<'a>(spans: impl Iterator<Item=&'a TextSpan>) -> Class {
+fn classify<'a, E: Encoder + 'a>(spans: impl Iterator<Item=&'a TextSpan<E>>) -> Class {
     use pdf_render::FontEntry;
 
     let mut bold = TriCount::new();
     let mut numeric = TriCount::new();
     let mut uniform = TriCount::new();
-    let mut first_font: *const FontEntry = std::ptr::null();
+    let mut first_font: *const FontEntry<E> = std::ptr::null();
 
     for s in spans {
         numeric.add(is_number(&s.text));

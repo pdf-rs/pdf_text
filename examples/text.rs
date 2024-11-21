@@ -8,7 +8,7 @@ fn main() {
     
     for (page_nr, page) in file.pages().enumerate() {
         let page = page.expect("can't read page");
-        let flow = pdf_text::run(&file, &page, &resolver).expect("can't render page");
+        let flow = pdf_text::run(&file, &page, &resolver, Default::default()).expect("can't render page");
         println!("# page {}", page_nr + 1);
         for run in flow.runs {
             for line in run.lines {

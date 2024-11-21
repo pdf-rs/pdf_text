@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use entry::Flow;
+use pathfinder_geometry::transform2d::Transform2F;
 use pdf::{backend::Backend, object::{Page, Resolve}, PdfError};
 use pdf_render::{tracer::{TraceCache, Tracer, DrawItem}, Fill, render_pattern, render_page, FillMode, font::OutlineBuilder};
 
@@ -9,17 +10,17 @@ mod util;
 mod text;
 pub mod entry;
 
-pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve) -> Result<Flow, PdfError> {
+pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve, transform: Transform2F) -> Result<Flow, PdfError> {
     let mut cache = TraceCache::new(OutlineBuilder::default());
 
     let mut clip_paths = vec![];
     let mut tracer = Tracer::new(&mut cache, &mut clip_paths);
 
-    render_page(&mut tracer, resolve, &page, Default::default())?;
+    render_page(&mut tracer, resolve, &page, transform)?;
 
     let bbox = tracer.view_box();
 
-    let items = tracer.finish();
+    let items: Vec<DrawItem<OutlineBuilder>> = tracer.finish();
     let mut patterns = HashSet::new();
     for item in items.iter() {
         if let DrawItem::Vector(ref v) = item {
@@ -80,8 +81,9 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
     for item in items {
         visit_item(item);
     }
-
+    
     let root = tree::build(&spans, bbox, &lines);
+    // dbg!(&root);
     let mut flow = Flow::new();
     tree::items(&mut flow, &spans, &root, bbox.min_x());
     Ok(flow)

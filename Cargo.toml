@@ -9,15 +9,22 @@ description = "PDF text extraction"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+
+[dependencies.pdf]
+default-features=false 
+features = ["cache", "dump"]
+git = "https://github.com/pdf-rs/pdf"
+
 [dependencies]
-pdf = { git = "https://github.com/pdf-rs/pdf", features = ["cache"] }
-pdf_render = { git = "https://github.com/pdf-rs/pdf_render" }
-font = { git = "https://github.com/pdf-rs/font" }
+pdf_render= { git = "https://github.com/videni/pdf_render_with_vello.git", branch="vello_wip"}
+# pdf_render= { path = "../pdf_render/render"}
+
 itertools = "*"
 log = "*"
 ordered-float = "*"
 serde = { version = "*", features = ["derive"] }
 unicode-normalization = "0.1.19"
+font = { git = "https://github.com/pdf-rs/font", branch = "vello", features=['cff']}
 
 pathfinder_geometry = { git = "https://github.com/servo/pathfinder" }
 pathfinder_color = { git = "https://github.com/servo/pathfinder" }

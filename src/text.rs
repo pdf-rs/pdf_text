@@ -6,20 +6,28 @@ use crate::{util::avg, entry::Word, util::Rect};
 
 pub fn concat_text<'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan> + Clone) -> Vec<Word> {
     let mut words = vec![];
+
     let gaps = items.clone()
         .flat_map(|s| {
             let tr_inv = s.transform.matrix.inverse();
             let pos = (tr_inv * s.transform.vector).x();
             s.chars.iter()
                 .filter(|c| !s.text[c.offset..].chars().next().unwrap().is_whitespace())
+                // (left edge, right edge, font size)
                 .map(move |c| (c.pos + pos, c.pos + pos + c.width, s.font_size))
         })
         .tuple_windows()
+        // skip things that go in reverse
         .filter(|(a, b)| b.0 > a.0)
+        // compute the distance between the right edge of the left char and the left edge of the right char
+        // and clamp it to a minimum of 0.01 and maximum of half the mean font size
         .map(|(a, b)| (b.0 - a.1).max(0.01).min(0.25 * (a.2 + b.2)));
-    
+
+    // compute the average font size of all chars
     let font_size = avg(items.clone().map(|s| s.font_size)).unwrap();
     //gaps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+    // set the threshold at twice the average gap, clamped to half the font size
     let space_gap = (0.5 * font_size).min(2.0 * avg(gaps).unwrap_or(0.0)); //2.0 * gaps[gaps.len()/2];
     let mut end = 0.; // trailing edge of the last char
     let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);

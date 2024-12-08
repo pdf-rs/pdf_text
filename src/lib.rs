@@ -5,7 +5,7 @@ use pathfinder_geometry::transform2d::Transform2F;
 use pdf::{backend::Backend, object::{Page, Resolve}, PdfError};
 use pdf_render::{tracer::{TraceCache, Tracer, DrawItem}, Fill, render_pattern, render_page, FillMode, font::OutlineBuilder};
 
-mod tree;
+mod node;
 mod util;
 mod text;
 mod classify;
@@ -17,14 +17,13 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
     let mut clip_paths = vec![];
     let mut tracer = Tracer::new(&mut cache, &mut clip_paths);
 
-    // The tracer backend can be used to get text, pattern, image, etc.
-    // We will use text and pattern to do further text processing.
+    //Get text, pattern, image by the Tracer backend.
     render_page(&mut tracer, resolve, &page, transform)?;
 
     let bbox = tracer.view_box();
 
     let items: Vec<DrawItem<OutlineBuilder>> = tracer.finish();
-    //Get patterns which may have lines and texts inside.
+    //Get all patterns which may have lines and texts inside.
     let mut patterns = HashSet::new();
     for item in items.iter() {
         if let DrawItem::Vector(ref v) = item {
@@ -84,20 +83,12 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
         }
     }
 
-    // After this loop, all the text and lines are ready
+    // After this loop, all the text and lines are ready for further processing.
     for item in items {
         visit_item(item);
     }
-  
-    spans.sort_unstable_by(|a, b| a.rect.min_y().partial_cmp(&b.rect.min_y()).unwrap());
 
-    spans.sort_unstable_by(|a, b| a.rect.min_x().partial_cmp(&b.rect.min_x()).unwrap());
-
-    for s in spans.iter().map(|s|s.text.as_str()) {
-        println!(":{}", s)
-    }
-
-    let root = tree::build(&spans, bbox, &lines);
+    let root = node::build(&spans, bbox, &lines);
 
     let mut flow = Flow::new();
     flow::build(&mut flow, &spans, &root, bbox.min_x());

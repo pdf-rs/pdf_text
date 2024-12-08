@@ -1,9 +1,9 @@
 use font::Encoder;
 use pathfinder_geometry::vector::Vector2F;
 use pdf_render::TextSpan;
-use itertools::{Itertools};
+use itertools::Itertools;
 use unicode_normalization::UnicodeNormalization;
-use crate::{util::avg, flow::Word, util::Rect};
+use crate::{util::avg, flow::{Word, Rect}};
 
 pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan<E>> + Clone) -> Vec<Word> {
     let mut words: Vec<Word> = vec![];

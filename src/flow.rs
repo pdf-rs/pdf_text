@@ -1,6 +1,6 @@
 use crate::classify::{classify, Class};
-use crate::tree::{Node, NodeTag};
-use crate::util::{avg, CellContent, Rect};
+use crate::node::{Node, NodeTag};
+use crate::util::avg;
 use crate::text::concat_text;
 use std::iter::once;
 use pathfinder_geometry::rect::RectF;
@@ -32,6 +32,33 @@ pub enum RunType {
     Paragraph,
     Header,
     Cell,
+}
+
+
+#[derive(Copy, Clone, Debug)]
+#[derive(Serialize, Deserialize)]
+#[repr(C)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32
+}
+impl From<RectF> for Rect {
+    fn from(r: RectF) -> Self {
+        Rect {
+            x: r.origin_x(),
+            y: r.origin_y(),
+            w: r.width(),
+            h: r.height()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CellContent {
+    pub text: String,
+    pub rect: Rect,
 }
 
 #[derive(Serialize, Deserialize)]

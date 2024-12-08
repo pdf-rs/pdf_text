@@ -7,13 +7,13 @@ fn main() {
     let resolver = file.resolver();
     
     // for (page_nr, page) in file.pages().enumerate() {
-        let page = file.get_page(0).unwrap();
+        let page: pdf::object::PageRc = file.get_page(0).unwrap();
         let flow = pdf_text::run(&file, &page, &resolver, Default::default()).expect("can't render page");
         println!("# page {}", 0 + 1);
         for run in flow.runs {
             for line in run.lines {
                 for w in line.words {
-                    // println!(": {}", w.text);
+                    println!(": {}", w.text);
                 }
             }
             println!();

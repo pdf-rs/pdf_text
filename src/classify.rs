@@ -5,8 +5,6 @@ use pdf_render::TextSpan;
 
 use crate::util::is_number;
 
-use super::util::Tri;
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Class {
     Number,
@@ -15,33 +13,6 @@ pub enum Class {
     Mixed,
 }
 
-#[derive(Debug)]
-pub struct TriCount {
-    tru: usize,
-    fal: usize,
-}
-impl TriCount {
-    fn new() -> Self {
-        TriCount {
-            tru: 0,
-            fal: 0
-        }
-    }
-    fn add(&mut self, b: bool) {
-        match b {
-            false => self.fal += 1,
-            true => self.tru += 1,
-        }
-    }
-    fn count(&self) -> Tri {
-        match (self.fal, self.tru) {
-            (0, 0) => Tri::Unknown,
-            (0, _) => Tri::True,
-            (_, 0) => Tri::False,
-            (f, t) => Tri::Maybe(t as f32 / (t + f) as f32)
-        }
-    }
-}
 pub fn classify<'a, E: Encoder + 'a>(spans: impl Iterator<Item=&'a TextSpan<E>>) -> Class {
     use pdf_render::FontEntry;
 
@@ -71,5 +42,40 @@ pub fn classify<'a, E: Encoder + 'a>(spans: impl Iterator<Item=&'a TextSpan<E>>)
         (_, Tri::False, _) => Class::Paragraph,
         (_, Tri::Maybe(_), _) => Class::Paragraph,
         _ => Class::Mixed
+    }
+}
+
+pub enum Tri {
+    False,
+    True,
+    Maybe(f32),
+    Unknown,
+}
+
+#[derive(Debug)]
+pub struct TriCount {
+    tru: usize,
+    fal: usize,
+}
+impl TriCount {
+    fn new() -> Self {
+        TriCount {
+            tru: 0,
+            fal: 0
+        }
+    }
+    fn add(&mut self, b: bool) {
+        match b {
+            false => self.fal += 1,
+            true => self.tru += 1,
+        }
+    }
+    fn count(&self) -> Tri {
+        match (self.fal, self.tru) {
+            (0, 0) => Tri::Unknown,
+            (0, _) => Tri::True,
+            (_, 0) => Tri::False,
+            (f, t) => Tri::Maybe(t as f32 / (t + f) as f32)
+        }
     }
 }

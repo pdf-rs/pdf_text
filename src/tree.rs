@@ -3,31 +3,31 @@ use pathfinder_geometry::{
     vector::Vector2F,
     rect::RectF
 };
+
+use std::collections::BTreeSet;
+
+use itertools::Itertools;
+use ordered_float::NotNan;
+use crate::classify::{classify, Class};
+use crate::util::avg;
+
 #[cfg(feature="ocr")]
 use tesseract_plumbing::Text;
 
-use std::collections::BTreeSet;
-use std::iter::once;
-use std::sync::Arc;
-use itertools::{Itertools};
-use ordered_float::NotNan;
-use crate::entry::{Flow, Line, Run, RunType, Word};
-use crate::util::{is_number, avg, CellContent};
-use crate::text::{concat_text};
 use std::mem::take;
 use table::Table;
-use font::{Encoder, Glyph};
+use font::Encoder;
 
 pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]]) -> Node {
     if spans.len() == 0 {
         return Node::singleton(&[]);
     }
-
     let mut boxes: Vec<(RectF, usize)> = spans.iter().enumerate().map(|(i, t)| (t.rect, i)).collect();
     let mut boxes = boxes.as_mut_slice();
     
     let avg_font_size = avg(spans.iter().map(|s| s.font_size)).unwrap();
-    let probaby_header = |boxes: &[(RectF, usize)]| {
+
+    let probably_header = |boxes: &[(RectF, usize)]| {
         let class = classify(boxes.iter().filter_map(|&(_, i)| spans.get(i)));
         if matches!(class, Class::Header | Class::Number) {
             return true;
@@ -40,7 +40,7 @@ pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]])
         let x_gaps: Vec<f32> = gaps(avg_font_size, boxes, |r| (r.min_x(), r.max_x()))
             .collect();
         
-        let count = split_by(boxes, &x_gaps, |r| r.min_x()).filter(|cell| probaby_header(cell)).count();
+        let count = split_by(boxes, &x_gaps, |r| r.min_x()).filter(|cell| probably_header(cell)).count();
         count == x_gaps.len() + 1
     };
 
@@ -52,19 +52,19 @@ pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]])
         }
     }
     if let Some(top) = top {
-        if probaby_header(&mut boxes[..top]) {
+        if probably_header(&mut boxes[..top]) {
             boxes = &mut boxes[top..];
         }
     }
     sort_x(boxes);
     let (left, right) = left_right_gap(boxes, bbox);
     if let Some(right) = right {
-        if probaby_header(&boxes[right..]) {
+        if probably_header(&boxes[right..]) {
             boxes = &mut boxes[..right];
         }
     }
     if let Some(left) = left {
-        if probaby_header(&boxes[..left]) {
+        if probably_header(&boxes[..left]) {
             boxes = &mut boxes[left..];
         }
     }
@@ -347,14 +347,14 @@ pub enum Node {
     Table { table: Table<Vec<usize>> },
 }
 impl Node {
-    fn tag(&self) -> NodeTag {
+    pub fn tag(&self) -> NodeTag {
         match *self {
             Node::Grid { tag, .. } => tag,
             Node::Table { .. } => NodeTag::Complex,
             Node::Final { .. } => NodeTag::Singleton,
         }
     }
-    fn indices(&self, out: &mut Vec<usize>) {
+    pub fn indices(&self, out: &mut Vec<usize>) {
         match *self {
             Node::Final { ref indices } => out.extend_from_slice(&indices),
             Node::Grid { ref cells, .. } => {
@@ -371,7 +371,7 @@ impl Node {
             }
         }
     }
-    fn singleton(nodes: &[(RectF, usize)]) -> Self {
+    pub fn singleton(nodes: &[(RectF, usize)]) -> Self {
         Node::Final { indices: nodes.iter().map(|t| t.1).collect() }
     }
 }
@@ -383,157 +383,6 @@ pub enum NodeTag {
     Paragraph,
     Complex,
 }
-
-pub fn items<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node: &Node, x_anchor: f32) {
-    match *node {
-        Node::Final { ref indices } => {
-            if indices.len() > 0 {
-                let node_spans = indices.iter().flat_map(|&i| spans.get(i));
-                let bbox = node_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap();
-                let class = classify(node_spans.clone());
-                let mut text = String::new();
-                let words = concat_text(&mut text, node_spans);
-                
-                let t = match class {
-                    Class::Header => RunType::Header,
-                    _ => RunType::Paragraph,
-                };
-                flow.add_line(words, t);
-            }
-        }
-        Node::Grid { ref x, ref y, ref cells, tag } => {
-            match tag {
-                NodeTag::Singleton |
-                NodeTag::Line => {
-                    let mut indices = vec![];
-                    node.indices(&mut indices);
-                    let line_spans = indices.iter().flat_map(|&i| spans.get(i));
-                    let bbox: RectF = line_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap().into();
-
-                    let mut text = String::new();
-                    let words = concat_text(&mut text, line_spans.clone());
-                    let class = classify(line_spans.clone());
-
-                    let t = match class {
-                        Class::Header => RunType::Header,
-                        _ => RunType::Paragraph,
-                    };
-                    flow.add_line(words, t);
-                }
-                NodeTag::Paragraph => {
-                    assert_eq!(x.len(), 0);
-                    let mut lines: Vec<(RectF, usize)> = vec![];
-                    let mut indices = vec![];
-                    for n in cells {
-                        let start = indices.len();
-                        n.indices(&mut indices);
-                        if indices.len() > start {
-                            let cell_spans = indices[start..].iter().flat_map(|&i| spans.get(i));
-                            let bbox = cell_spans.map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap().into();
-                            lines.push((bbox, indices.len()));
-                        }
-                    }
-
-                    let para_spans = indices.iter().flat_map(|&i| spans.get(i));
-                    let class = classify(para_spans.clone());
-                    let bbox = lines.iter().map(|t| t.0).reduce(|a, b| a.union_rect(b)).unwrap();
-                    let line_height = avg(para_spans.map(|s| s.rect.height())).unwrap();
-                    // classify the lines by this vertical line
-                    let left_margin = bbox.min_x() + 0.5 * line_height;
-
-                    // count how many are right and left of the split.
-                    let mut left = 0;
-                    let mut right = 0;
-
-                    for (line_bbox, _) in lines.iter() {
-                        if line_bbox.min_x() >= left_margin {
-                            right += 1;
-                        } else {
-                            left += 1;
-                        }
-                    }
-
-                    // typically paragraphs are indented to the right and longer than 2 lines.
-                    // then there will be a higher left count than right count.
-                    let indent = left > right;
-
-                    let mut para_start = 0;
-                    let mut line_start = 0;
-                    let mut text = String::new();
-                    let mut para_bbox = RectF::default();
-                    let mut flow_lines = vec![];
-                    for &(line_bbox, end) in lines.iter() {
-                        if line_start != 0 {
-                            // if a line is indented (or outdented), it marks a new paragraph
-                            if (line_bbox.min_x() >= left_margin) == indent {
-                                flow.runs.push(Run {
-                                    lines: take(&mut flow_lines),
-                                    kind: match class {
-                                        Class::Header => RunType::Header,
-                                        _ => RunType::Paragraph
-                                    }
-                                });
-                                para_start = line_start;
-                            } else {
-                                text.push('\n');
-                            }
-                        }
-                        if end > line_start {
-                            let words = concat_text(&mut text, indices[line_start..end].iter().flat_map(|&i| spans.get(i)));
-
-                            if words.len() > 0 {
-                                flow_lines.push(Line { words });
-                            }
-                        }
-                        if para_start == line_start {
-                            para_bbox = line_bbox;
-                        } else {
-                            para_bbox = para_bbox.union_rect(line_bbox);
-                        }
-                        line_start = end;
-                    }
-
-                    flow.runs.push(Run {
-                        lines: flow_lines,
-                        kind: match class {
-                            Class::Header => RunType::Header,
-                            _ => RunType::Paragraph
-                        }
-                    });
-                }
-                NodeTag::Complex => {
-                    let x_anchors = once(x_anchor).chain(x.iter().cloned()).cycle();
-                    for (node, x) in cells.iter().zip(x_anchors) {
-                        items(flow, spans, node, x);
-                    }
-                }
-            }
-        }
-        Node::Table { ref table } => {
-            if let Some(bbox) = table.values()
-                .flat_map(|v| v.value.iter().flat_map(|&i| spans.get(i).map(|s| s.rect)))
-                .reduce(|a, b| a.union_rect(b)) {
-                let table = table.flat_map(|indices| {
-                    if indices.len() == 0 {
-                        None
-                    } else {
-                        let line_spans = indices.iter().flat_map(|&i| spans.get(i));
-                        let bbox: RectF = line_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap().into();
-
-                        let mut text = String::new();
-                        concat_text(&mut text, line_spans.clone());
-                        Some(CellContent {
-                            text,
-                            rect: bbox.into(),
-                        })
-                    }
-                });
-                flow.add_table(table);
-            }
-        }
-    }
-}
-
 
 pub fn render<E: Encoder>(w: &mut String, spans: &[TextSpan<E>], node: &Node, bbox: RectF) {
     _render(w, spans, node, bbox, 0)
@@ -724,9 +573,15 @@ fn top_bottom_gap(boxes: &mut [(RectF, usize)], bbox: RectF) -> (Option<usize>, 
         return (None, None);
     }
 
-    let mut gaps = gap_list(boxes, |r| (r.min_y(), r.max_y()));
+    let mut gaps = gap_list(boxes, |r| (
+        // top left y
+        r.min_y(), 
+        // bottom right y
+        r.max_y()
+    ));
     let top_limit = bbox.min_y() + bbox.height() * 0.2;
     let bottom_limit = bbox.min_y() + bbox.height() * 0.8;
+
     match gaps.next() {
         Some((y, _, top)) if y < top_limit => {
             match gaps.last() {
@@ -738,6 +593,7 @@ fn top_bottom_gap(boxes: &mut [(RectF, usize)], bbox: RectF) -> (Option<usize>, 
         _ => (None, None)
     }
 }
+
 fn left_right_gap(boxes: &mut [(RectF, usize)], bbox: RectF) -> (Option<usize>, Option<usize>) {
     let num_boxes = boxes.len();
     if num_boxes < 2 {
@@ -812,6 +668,7 @@ fn gap_list<'a>(boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32)
     let &(ref r, _) = boxes.next().unwrap();
     let (_, mut last_max) = span(r);
     boxes.enumerate().filter_map(move |(idx, &(ref r, _))| {
+        // top left y, bottom right y
         let (min, max) = span(&r);
         let r = if min > last_max {
             Some((last_max, min, idx+1))
@@ -887,73 +744,5 @@ impl<'a, I, F> Iterator for SplitBy<'a, I, F> where
                 Some(take(&mut self.data))
             }
         }
-    }
-}
-
-use super::util::Tri;
-#[derive(Copy, Clone, Debug, PartialEq)]
-enum Class {
-    Number,
-    Header,
-    Paragraph,
-    Mixed,
-}
-
-#[derive(Debug)]
-struct TriCount {
-    tru: usize,
-    fal: usize,
-}
-impl TriCount {
-    fn new() -> Self {
-        TriCount {
-            tru: 0,
-            fal: 0
-        }
-    }
-    fn add(&mut self, b: bool) {
-        match b {
-            false => self.fal += 1,
-            true => self.tru += 1,
-        }
-    }
-    fn count(&self) -> Tri {
-        match (self.fal, self.tru) {
-            (0, 0) => Tri::Unknown,
-            (0, _) => Tri::True,
-            (_, 0) => Tri::False,
-            (f, t) => Tri::Maybe(t as f32 / (t + f) as f32)
-        }
-    }
-}
-fn classify<'a, E: Encoder + 'a>(spans: impl Iterator<Item=&'a TextSpan<E>>) -> Class {
-    use pdf_render::FontEntry;
-
-    let mut bold = TriCount::new();
-    let mut numeric = TriCount::new();
-    let mut uniform = TriCount::new();
-    let mut first_font: *const FontEntry<E> = std::ptr::null();
-
-    for s in spans {
-        numeric.add(is_number(&s.text));
-        if let Some(ref font) = s.font {
-            bold.add(font.name.contains("Bold"));
-            let font_ptr = Arc::as_ptr(font);
-            if first_font.is_null() {
-                first_font = font_ptr;
-            } else {
-                uniform.add(font_ptr == first_font);
-            }
-        }
-    }
-    uniform.add(true);
-
-    match (numeric.count(), bold.count(), uniform.count()) {
-        (Tri::True, _, Tri::True) => Class::Number,
-        (_, Tri::True, Tri::True) => Class::Header,
-        (_, Tri::False, Tri::True) => Class::Paragraph,
-        (_, Tri::False, _) => Class::Paragraph,
-        (_, Tri::Maybe(_), _) => Class::Paragraph,
-        _ => Class::Mixed
     }
 }

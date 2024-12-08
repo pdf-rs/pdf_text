@@ -6,15 +6,17 @@ fn main() {
     let file = FileOptions::cached().open(&input).expect("can't read PDF");
     let resolver = file.resolver();
     
-    for (page_nr, page) in file.pages().enumerate() {
-        let page = page.expect("can't read page");
+    // for (page_nr, page) in file.pages().enumerate() {
+        let page = file.get_page(0).unwrap();
         let flow = pdf_text::run(&file, &page, &resolver, Default::default()).expect("can't render page");
-        println!("# page {}", page_nr + 1);
+        println!("# page {}", 0 + 1);
         for run in flow.runs {
             for line in run.lines {
-                println!("{}", line.words.iter().map(|w| &w.text).format(" "));
+                for w in line.words {
+                    // println!(": {}", w.text);
+                }
             }
             println!();
         }
-    }
+    // }
 }

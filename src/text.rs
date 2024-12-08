@@ -3,10 +3,12 @@ use pathfinder_geometry::vector::Vector2F;
 use pdf_render::TextSpan;
 use itertools::{Itertools};
 use unicode_normalization::UnicodeNormalization;
-use crate::{util::avg, entry::Word, util::Rect};
+use crate::{util::avg, flow::Word, util::Rect};
 
 pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan<E>> + Clone) -> Vec<Word> {
-    let mut words = vec![];
+    let mut words: Vec<Word> = vec![];
+    // dbg!(items.clone().map(|s| s).collect::<Vec<_>>());
+    // gaps between each char
     let gaps = items.clone()
         .flat_map(|s| {
             let tr_inv = s.transform.matrix.inverse();
@@ -22,6 +24,7 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
     let font_size = avg(items.clone().map(|s| s.font_size)).unwrap();
     //gaps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
     let space_gap = (0.5 * font_size).min(2.0 * avg(gaps).unwrap_or(0.0)); //2.0 * gaps[gaps.len()/2];
+    
     let mut end = 0.; // trailing edge of the last char
     let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
     let mut word_start_pos = 0.0;

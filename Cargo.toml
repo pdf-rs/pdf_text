@@ -16,8 +16,8 @@ features = ["cache", "dump"]
 git = "https://github.com/pdf-rs/pdf"
 
 [dependencies]
-pdf_render= { git = "https://github.com/videni/pdf_render_with_vello.git", branch="vello_wip"}
-# pdf_render= { path = "../pdf_render/render"}
+# pdf_render= { git = "https://github.com/videni/pdf_render_with_vello.git", branch="vello_wip"}
+pdf_render= { path = "../pdf_render/render"}
 
 itertools = "*"
 log = "*"

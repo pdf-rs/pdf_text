@@ -341,10 +341,6 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         return Node::singleton(boxes);
     }
 
-    // for b in boxes.iter(){
-    //     dbg!(b.0, b.1, spans.get(b.1).unwrap().text.as_str());
-    // }
-
     sort_x(boxes);
     let max_x_gap = dist_x(boxes);
 
@@ -381,8 +377,11 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         return split2(boxes, spans, lines);
     }
 
+    assert!(
+        x_gaps.len() > 0 || y_gaps.len() > 0, 
+        "At least one of x_gaps and y_gaps must be non-empty, otherwise the memory will be exhausted"
+    );
     sort_y(boxes);
-
     for row in split_by(boxes, &y_gaps, |r| r.min_y()) {
         if x_gaps.len() > 0 {
             sort_x(row);
@@ -396,7 +395,6 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         }
     }
 
-    assert!(x_gaps.len() > 0 || y_gaps.len() > 0);
     let tag = if y_gaps.len() == 0 {
         if cells.iter().all(|n| n.tag() <= NodeTag::Line) {
             NodeTag::Line

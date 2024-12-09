@@ -11,7 +11,7 @@ mod text;
 mod classify;
 pub mod flow;
 
-pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve, transform: Transform2F) -> Result<Flow, PdfError> {
+pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve, transform: Transform2F, without_header_and_footer: bool) -> Result<Flow, PdfError> {
     let mut cache = TraceCache::new(OutlineBuilder::default());
 
     let mut clip_paths = vec![];
@@ -88,7 +88,7 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
         visit_item(item);
     }
 
-    let root = node::build(&spans, bbox, &lines);
+    let root = node::build(&spans, bbox, &lines, without_header_and_footer);
 
     let mut flow = Flow::new();
     flow::build(&mut flow, &spans, &root, bbox.min_x());

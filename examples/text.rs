@@ -8,15 +8,20 @@ fn main() {
     
     // for (page_nr, page) in file.pages().enumerate() {
         let page: pdf::object::PageRc = file.get_page(0).unwrap();
-        let flow = pdf_text::run(&file, &page, &resolver, Default::default()).expect("can't render page");
+        let flow = pdf_text::run(&file, &page, &resolver, Default::default(), false).expect("can't render page");
+
         println!("# page {}", 0 + 1);
         for run in flow.runs {
             for line in run.lines {
                 for w in line.words {
-                    println!(": {}", w.text);
+                    println!("{}", w.text);
                 }
             }
-            println!();
+        }
+        for line in flow.lines {
+            for w in line.words {
+                println!("{}", w.text);
+            }
         }
     // }
 }

@@ -5,8 +5,8 @@ pub fn gap_list<'a>(boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, 
     let mut boxes = boxes.iter();
     let &(ref r, _) = boxes.next().unwrap();
     let (_, mut last_max) = span(r);
+
     boxes.enumerate().filter_map(move |(idx, &(ref r, _))| {
-        // top left y, bottom right y
         let (min, max) = span(&r);
         let r = if min > last_max {
             Some((last_max, min, idx+1))
@@ -25,6 +25,7 @@ pub fn gaps<'a>(threshold: f32, boxes: &'a [(RectF, usize)], span: impl Fn(&Rect
     boxes.filter_map(move |&(ref r, _)| {
         let (min, max) = span(&r);
         let r = if min - last_max >= threshold {
+            // The middle position of the gap
             Some(0.5 * (last_max + min))
         } else {
             None
@@ -34,6 +35,7 @@ pub fn gaps<'a>(threshold: f32, boxes: &'a [(RectF, usize)], span: impl Fn(&Rect
     })
 }
 
+/// Return the size of the gap and the middle position of the gap.
 pub fn max_gap(boxes: &[(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32)) -> Option<(f32, f32)> {
     gap_list(boxes, span)
     .max_by_key(|&(a, b, _)| NotNan::new(b - a).unwrap())

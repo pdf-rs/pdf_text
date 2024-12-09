@@ -2,7 +2,7 @@ mod gap;
 mod line;
 mod render;
 
-use gap::{dist_x, dist_y, gaps, left_right_gap, top_bottom_gap};
+use gap::{dist_x, dist_y, gap_list, gaps, left_right_gap, top_bottom_gap};
 use line::{analyze_lines, overlapping_lines, Lines};
 use pdf_render::TextSpan;
 use pathfinder_geometry::rect::RectF;
@@ -15,18 +15,30 @@ use crate::util::avg;
 #[cfg(feature="ocr")]
 use tesseract_plumbing::Text;
 
+use std::boxed;
 use std::mem::take;
 use table::Table;
 use font::Encoder;
 
-pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]]) -> Node {
+pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]], without_header_and_footer: bool) -> Node {
     if spans.len() == 0 {
         return Node::singleton(&[]);
     }
+
     let mut boxes: Vec<(RectF, usize)> = spans.iter().enumerate().map(|(i, t)| (t.rect, i)).collect();
     let mut boxes = boxes.as_mut_slice();
+    if without_header_and_footer {
+        boxes = exclude_header_and_footer(boxes, bbox, spans);
+    }
+
+    let lines = analyze_lines(lines);
     
-    let avg_font_size = avg(spans.iter().map(|s| s.font_size)).unwrap();
+    split(&mut boxes, &spans, &lines)
+}
+
+pub fn exclude_header_and_footer<'a, E: Encoder>(boxes: &'a mut [(RectF, usize)], bbox: RectF, spans: &[TextSpan<E>]) -> &'a mut [(RectF, usize)]
+{
+    let avg_font_size: f32 = avg(spans.iter().map(|s| s.font_size)).unwrap();
 
     let probably_header = |boxes: &[(RectF, usize)]| {
         let class = classify(boxes.iter().filter_map(|&(_, i)| spans.get(i)));
@@ -41,11 +53,15 @@ pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]])
         let x_gaps: Vec<f32> = gap::gaps(avg_font_size, boxes, |r| (r.min_x(), r.max_x()))
             .collect();
         
-        let count = split_by(boxes, &x_gaps, |r| r.min_x()).filter(|cell| probably_header(cell)).count();
-        count == x_gaps.len() + 1
+        let is_footer = split_by(boxes, x_gaps.as_slice(), |r| r.min_x())
+            .all(|cell| probably_header(cell));
+
+        is_footer
     };
 
     sort_y(boxes);
+
+    let mut boxes = boxes;
     let (top, bottom) = top_bottom_gap(boxes, bbox);
     if let Some(bottom) = bottom {
         if probably_footer(&mut boxes[bottom..]) {
@@ -69,10 +85,9 @@ pub fn build<E: Encoder>(spans: &[TextSpan<E>], bbox: RectF, lines: &[[f32; 4]])
             boxes = &mut boxes[left..];
         }
     }
-    let lines = analyze_lines(lines);
-    split(boxes, &spans, &lines)
-}
 
+    boxes
+}
 
 #[derive(Copy, Clone, Debug)]
 struct Span {
@@ -326,8 +341,13 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         return Node::singleton(boxes);
     }
 
+    // for b in boxes.iter(){
+    //     dbg!(b.0, b.1, spans.get(b.1).unwrap().text.as_str());
+    // }
+
     sort_x(boxes);
     let max_x_gap = dist_x(boxes);
+
     sort_y(boxes);
     let max_y_gap = dist_y(boxes);
 
@@ -362,8 +382,8 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
     }
 
     sort_y(boxes);
-    for row in split_by(boxes, &y_gaps, |r| r.min_y()) {
 
+    for row in split_by(boxes, &y_gaps, |r| r.min_y()) {
         if x_gaps.len() > 0 {
             sort_x(row);
             for cell in split_by(row, &x_gaps, |r| r.min_x()) {
@@ -400,6 +420,7 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         tag,
     }
 }
+
 #[allow(dead_code)]
 fn split_v(boxes: &mut [(RectF, usize)]) -> Node {
     let num_boxes = boxes.len();

@@ -101,6 +101,7 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                     Class::Header => RunType::Header,
                     _ => RunType::Paragraph,
                 };
+              
                 flow.add_line(words, t);
             }
         }
@@ -121,6 +122,8 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                         Class::Header => RunType::Header,
                         _ => RunType::Paragraph,
                     };
+
+                
                     flow.add_line(words, t);
                 }
                 NodeTag::Paragraph => {

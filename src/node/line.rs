@@ -43,6 +43,7 @@ pub fn analyze_lines(lines: &[[f32; 4]]) -> Lines {
 
     let mut line_grid = vec![false; vlines.len() * hlines.len()];
     for &[x1, y1, x2, y2] in lines {
+        // horizontal line
         if x1 == x2 {
             let v_idx = vlines.iter().position(|&(a, b)| a <= x1 && x1 <= b).unwrap_or(vlines.len());
             let h_start = hlines.iter().position(|&(a, b)| y1 >= a).unwrap_or(hlines.len());
@@ -50,7 +51,9 @@ pub fn analyze_lines(lines: &[[f32; 4]]) -> Lines {
             for h in h_start .. h_end {
                 line_grid[v_idx * hlines.len() + h] = true;
             }
-        } else if y1 == y2 {
+        } 
+        // vertical line
+        else if y1 == y2 {
             let h_idx = hlines.iter().position(|&(a, b)| a <= y1 && y1 <= b).unwrap_or(hlines.len());
             let v_start = vlines.iter().position(|&(a, b)| x1 >= a).unwrap_or(vlines.len());
             let v_end = vlines.iter().position(|&(a, b)| x2 <= b).unwrap_or(vlines.len());
@@ -60,19 +63,25 @@ pub fn analyze_lines(lines: &[[f32; 4]]) -> Lines {
         }
     }
 
-
     //println!("hlines: {:?}", hlines);
     //println!("vlines: {:?}", vlines);
 
     Lines { hlines, vlines, line_grid }
 }
 
+#[derive(Debug)]
 pub struct Lines {
     pub hlines: Vec<(f32, f32)>,
     pub vlines: Vec<(f32, f32)>,
     pub line_grid: Vec<bool>,
 }
 
+/// Deals with things like superscript and subscript, which fall outside the usual bounds 
+/// but need to be assigned to the correct line.
+/// 
+/// example, two lines:
+/// hello world
+/// m³2 test a number℡
 pub fn overlapping_lines(boxes: &mut [(RectF, usize)]) -> Node {
     sort_y(boxes);
     let avg_height = avg(boxes.iter().map(|(r, _)| r.height())).unwrap();

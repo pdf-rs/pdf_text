@@ -18,10 +18,10 @@ fn main() {
                 }
             }
         }
-        for line in flow.lines {
-            for w in line.words {
-                println!("{}", w.text);
-            }
-        }
+        // for line in flow.lines {
+        //     for w in line.words {
+        //         println!("{}", w.text);
+        //     }
+        // }
     // }
 }

@@ -10,7 +10,6 @@ fn main() {
         let page: pdf::object::PageRc = file.get_page(0).unwrap();
         let flow = pdf_text::run(&file, &page, &resolver, Default::default(), false).expect("can't render page");
 
-        println!("# page {}", 0 + 1);
         for run in flow.runs {
             for line in run.lines {
                 println!("{}", line.words.iter().map(|w| w.text.as_str()).format(" "));

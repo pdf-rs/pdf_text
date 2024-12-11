@@ -32,17 +32,19 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
             let next_offset = chars.get(i + 1).map_or(span.text.len(), |next| next.offset);
             let s: &str = &span.text[offset..next_offset];
 
-            out.extend(s.nfkc());
-
             let is_whitespace = s.chars().all(|c| c.is_whitespace());
             if trailing_space {
                 if !is_whitespace {
                     word_start = true;
-                    word_start_idx = out.len() - s.len();
+                    word_start_idx = out.len();
                 }
                 trailing_space = is_whitespace;
+
+                out.extend(s.nfkc());
             } else {
                 trailing_space = is_whitespace;
+                out.extend(s.nfkc());
+
                 if is_whitespace {
                     words.push(Word {
                         text: out[word_start_idx..out.len()-s.len()].into(),

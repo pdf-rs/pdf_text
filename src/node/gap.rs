@@ -1,6 +1,7 @@
 use ordered_float::NotNan;
 use pathfinder_geometry::rect::RectF;
 
+/// Find all the gaps in boxes 
 pub fn gap_list<'a>(boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32) + 'a) -> impl Iterator<Item=(f32, f32, usize)> + 'a {
     let mut boxes = boxes.iter();
     let &(ref r, _) = boxes.next().unwrap();
@@ -18,6 +19,7 @@ pub fn gap_list<'a>(boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, 
     })
 }
 
+/// Find every the middle points of a gap in boxes that are greater than the threshold.
 pub fn gaps<'a>(threshold: f32, boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32) + 'a) -> impl Iterator<Item=f32> + 'a {
     let mut boxes = boxes.iter();
     let &(ref r, _) = boxes.next().unwrap();
@@ -35,7 +37,7 @@ pub fn gaps<'a>(threshold: f32, boxes: &'a [(RectF, usize)], span: impl Fn(&Rect
     })
 }
 
-/// Return the size of the gap and the middle position of the gap.
+/// Return the size of the max gap and its the middle position.
 pub fn max_gap(boxes: &[(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32)) -> Option<(f32, f32)> {
     gap_list(boxes, span)
     .max_by_key(|&(a, b, _)| NotNan::new(b - a).unwrap())
@@ -94,5 +96,38 @@ pub fn left_right_gap(boxes: &mut [(RectF, usize)], bbox: RectF) -> (Option<usiz
         }
         Some((x, _, right)) if x > right_limit => (None, Some(right)),
         _ => (None, None)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pathfinder_geometry::rect::RectF;
+    use pathfinder_geometry::vector::Vector2F;
+
+    #[test]
+    fn test_the_gaps_method() {
+        //  3 horizontal rectangles
+        let boxes = vec![
+            (RectF::from_points(Vector2F::new(0.0, 0.0), Vector2F::new(10.0, 10.0)), 1), // Rectangle 1
+            (RectF::from_points(Vector2F::new(12.0, 0.0), Vector2F::new(22.0, 10.0)), 2), // Rectangle 2 (gap from 10 to 12)
+            (RectF::from_points(Vector2F::new(25.0, 0.0),Vector2F::new( 35.0, 10.0)), 3), // Rectangle 3 (gap from 22 to 25)
+        ];
+
+        // Define the threshold for gap detection
+        let threshold = 2.0;
+
+        // Define the span function (maps rectangles to their min and max x-coordinates)
+        let span = |rect: &RectF| (rect.min_x(), rect.max_x());
+
+        // Call the gaps function
+        let gaps: Vec<f32> = gaps(threshold, &boxes, span).collect();
+
+        // Expected gaps are the midpoints of the gaps: [(10+12)/2 = 11, (22+25)/2 = 23.5]
+        let expected_gaps = vec![11.0, 23.5];
+
+        // Assert that the results match the expected values
+        assert_eq!(gaps, expected_gaps);
     }
 }

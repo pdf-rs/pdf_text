@@ -19,31 +19,12 @@ pub fn analyze_lines(lines: &[[f32; 4]]) -> Lines {
         }
     }
 
-    fn dedup(lines: impl Iterator<Item=NotNan<f32>>) -> Vec<(f32, f32)> {
-        let threshold = 10.0;
-        let mut out = vec![];
-        let mut lines = lines.map(|f| *f).peekable();
-        while let Some(start) = lines.next() {
-            let mut last = start;
-            while let Some(&p) = lines.peek() {
-                if last + threshold > p {
-                    last = p;
-                    lines.next();
-                } else {
-                    break;
-                }
-            }
-            out.push((start, last));
-        }
-        out
-    }
-
     let hlines = dedup(hlines.iter().cloned());
     let vlines = dedup(vlines.iter().cloned());
 
     let mut line_grid = vec![false; vlines.len() * hlines.len()];
     for &[x1, y1, x2, y2] in lines {
-        // horizontal line
+        // vertical line
         if x1 == x2 {
             let v_idx = vlines.iter().position(|&(a, b)| a <= x1 && x1 <= b).unwrap_or(vlines.len());
             let h_start = hlines.iter().position(|&(a, b)| y1 >= a).unwrap_or(hlines.len());
@@ -52,7 +33,7 @@ pub fn analyze_lines(lines: &[[f32; 4]]) -> Lines {
                 line_grid[v_idx * hlines.len() + h] = true;
             }
         } 
-        // vertical line
+        // horizontal line
         else if y1 == y2 {
             let h_idx = hlines.iter().position(|&(a, b)| a <= y1 && y1 <= b).unwrap_or(hlines.len());
             let v_start = vlines.iter().position(|&(a, b)| x1 >= a).unwrap_or(vlines.len());
@@ -67,6 +48,26 @@ pub fn analyze_lines(lines: &[[f32; 4]]) -> Lines {
     //println!("vlines: {:?}", vlines);
 
     Lines { hlines, vlines, line_grid }
+}
+
+/// Group lines that are consecutive within a distance of 10.0.
+fn dedup(lines: impl Iterator<Item=NotNan<f32>>) -> Vec<(f32, f32)> {
+    let threshold = 10.0;
+    let mut out = vec![];
+    let mut lines = lines.map(|f| *f).peekable();
+    while let Some(start) = lines.next() {
+        let mut last = start;
+        while let Some(&p) = lines.peek() {
+            if last + threshold > p {
+                last = p;
+                lines.next();
+            } else {
+                break;
+            }
+        }
+        out.push((start, last));
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -121,5 +122,37 @@ pub fn overlapping_lines(boxes: &mut [(RectF, usize)]) -> Node {
             cells: lines,
             tag: NodeTag::Paragraph
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ordered_float::NotNan;
+
+    #[test]
+    fn test_dedup() {
+        // Input data: A series of sorted `NotNan<f32>` values
+        let input = vec![
+            NotNan::new(1.0).unwrap(),
+            NotNan::new(5.0).unwrap(),
+            NotNan::new(8.0).unwrap(),
+            NotNan::new(12.0).unwrap(),
+
+            NotNan::new(25.0).unwrap(),
+            NotNan::new(28.0).unwrap(),
+        ];
+
+        // Call the dedup function
+        let result = dedup(input.into_iter());
+
+        // Expected output:
+        // (1.0, 12.0): All values between 1.0 and 12.0 are within a threshold of 10.0.
+        // (25.0, 28.0): 25.0 and 28.0 are within a threshold of 10.0.
+        let expected = vec![(1.0, 12.0), (25.0, 28.0)];
+
+        // Assert that the result matches the expected output
+        assert_eq!(result, expected);
     }
 }

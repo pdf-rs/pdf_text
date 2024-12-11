@@ -6,9 +6,124 @@ use unicode_normalization::UnicodeNormalization;
 use crate::{util::avg, flow::{Word, Rect}};
 
 pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan<E>> + Clone) -> Vec<Word> {
+    let word_gap = analyze_word_gap(items.clone());
     let mut words: Vec<Word> = vec![];
+
+    let mut end = 0.; // trailing edge of the last char
+
+    // Whether the last processed TextChar is a space
+    let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
+
+    let mut word_start_pos = 0.0;
+    let mut word_end_pos = 0.0;
+
+    let mut word_start_idx = out.len();
+    let mut y_min = f32::INFINITY;
+    let mut y_max = -f32::INFINITY;
+    let mut word_start = true;
+
+    for span in items {
+        let mut offset = 0; // byte index of last char into span.text
+        let tr_inv = span.transform.matrix.inverse();
+        let x_off = (tr_inv * span.transform.vector).x();
+        
+        let chars = span.chars.as_slice();
+        for (i, c) in chars.iter().enumerate() {
+            let next_offset = chars.get(i + 1).map_or(span.text.len(), |next| next.offset);
+            let s: &str = &span.text[offset..next_offset];
+
+            out.extend(s.nfkc());
+
+            let is_whitespace = s.chars().all(|c| c.is_whitespace());
+            if trailing_space {
+                if !is_whitespace {
+                    word_start = true;
+                    word_start_idx = out.len() - s.len();
+                }
+                trailing_space = is_whitespace;
+            } else {
+                trailing_space = is_whitespace;
+                if is_whitespace {
+                    words.push(Word {
+                        text: out[word_start_idx..out.len()-s.len()].into(),
+                        rect: Rect {
+                            x: word_start_pos,
+                            y: y_min,
+                            h: y_max - y_min,
+                            w: word_end_pos - word_start_pos
+                        }
+                    });
+                } else if c.pos + x_off > end + word_gap {
+                    words.push(Word {
+                        text: out[word_start_idx..].into(),
+                        rect: Rect {
+                            x: word_start_pos,
+                            y: y_min,
+                            h: y_max - y_min,
+                            w: word_end_pos - word_start_pos
+                        }
+                    });
+                    
+                    out.push(' ');
+                    trailing_space = true;
+                    word_start = true;
+                    word_start_idx = out.len() - 1;
+                }
+            }
+
+            end = c.pos + x_off + c.width;
+            word_end_pos = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
+
+            if word_start {
+                y_min = span.rect.min_y();
+                y_max = span.rect.max_y();
+                word_start_pos = (span.transform.matrix * Vector2F::new(c.pos + x_off, 0.0)).x();
+                word_start = false;
+            } else {
+                y_min = y_min.min(span.rect.min_y());
+                y_max = y_max.max(span.rect.max_y());
+            }
+
+            offset = next_offset;
+        }
+    }
+    
+    words.push(Word {
+        text: out[word_start_idx..].into(),
+        rect: Rect {
+            x: word_start_pos,
+            y: y_min,
+            h: y_max - y_min,
+            w: word_end_pos - word_start_pos
+        }
+    });
   
-    // Calculate gaps between each char, the unit is em, relative to the font size.
+    words
+}
+
+/// Calculate gaps between each char,
+/// The most important thing here is to make sure the gap is bigger than char gap, and less than word gap.
+/// 
+/// for example: 
+/// think of something like "ab ____________c de"
+/// 
+/// a-b has a zero space (or 0.01)
+/// b-c has a huge space of 10
+/// c-d has 0.2
+/// d-e has 0.01
+/// if we just take the average = 10.2 and divide that by 4 we get 2.5
+/// and now c-d is smaller than that and not classified as a space
+/// but if b-c is capped by the threshold of 0.5, the sum is 0.7, and the avg is 0.7/4 ~ 0.18
+/// and everything is fine.
+
+/// 0 + min(0.5, 10) + 0.2 + 0
+/// 10 capped at 0.5 is0.5
+/// min(0, 0.5) + min(10, 0.5) + min(0.2, 0.5) + min(0, 0.5)
+/// 0 + 0.5 + 0.2 + 0
+/// every value is limited to be at least 0.01 and not more than 0.5.
+/// the 0.5 is 0.25 * font size of the left char and 0.25 * font size of the right char
+/// if they are the same font size it is 0.5
+fn analyze_word_gap<'a, E: Encoder + 'a>(items: impl Iterator<Item=&'a TextSpan<E>> + Clone) -> f32 {
     let gaps = items.clone()
         .flat_map(|s| {
             // the transform matrix is from em space to device space
@@ -23,86 +138,11 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
         .tuple_windows()
         .filter(|(a, b)| b.0 > a.0)
         .map(|(a, b)| (b.0 - a.1).max(0.01).min(0.25 * (a.2 + b.2)));
-    
-    let font_size = avg(items.clone().map(|s| s.font_size)).unwrap();
+
+    let avg_font_size = avg(items.clone().map(|s| s.font_size)).unwrap();
     //gaps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    let space_gap = (0.5 * font_size).min(2.0 * avg(gaps).unwrap_or(0.0)); //2.0 * gaps[gaps.len()/2];
-    
-    let mut end = 0.; // trailing edge of the last char
-    // out中最后一个字符是否是空格
-    let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
-    let mut word_start_pos = 0.0;
-    let mut word_start_idx = out.len();
-    let mut y_min = f32::INFINITY;
-    let mut y_max = -f32::INFINITY;
-    let mut word_start = true;
-    let mut word_end = 0.0;
 
-    for span in items {
-        let mut pos = 0; // byte index of last char into span.text
-        let tr_inv = span.transform.matrix.inverse();
-        let x_off = (tr_inv * span.transform.vector).x();
-        
-        for c in span.chars.iter() {
-            // current string of TextChar
-            let s = &span.text[pos..c.offset];
-            if c.offset > 0 {
-                let is_whitespace = s.chars().all(|c| c.is_whitespace());
-                // 在不为空格的时候， 将 s 写入 out.
-                if !trailing_space || !is_whitespace {
-                    out.extend(s.nfkc());
-                }
-                trailing_space = is_whitespace;
-            }
-            // 在 s 不为空格，且有gap 的时候，记录一个 word.
-            if !trailing_space && c.pos + x_off > end + space_gap {
-                words.push(Word {
-                    text: out[word_start_idx..].into(),
-                    rect: Rect {
-                        x: word_start_pos,
-                        y: y_min,
-                        h: y_max - y_min,
-                        w: word_end - word_start_pos
-                    }
-                });
-                
-                out.push(' ');
-                trailing_space = true;
-                word_start = true;
-                word_start_idx = out.len();
-            }
-            pos = c.offset;
-            end = c.pos + x_off + c.width;
-            if c.offset == 0 || !trailing_space {
-                word_end = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
-            }
-
-            if word_start {
-                y_min = span.rect.min_y();
-                y_max = span.rect.max_y();
-                word_start_pos = (span.transform.matrix * Vector2F::new(c.pos + x_off, 0.0)).x();
-                word_start = false;
-            } else {
-                y_min = y_min.min(span.rect.min_y());
-                y_max = y_max.max(span.rect.max_y());
-            }
-        }
-        
-        trailing_space = span.text[pos..].chars().all(|c| c.is_whitespace());
-
-        out.extend(span.text[pos..].nfkc());
-    }
-    words.push(Word {
-        text: out[word_start_idx..].into(),
-        rect: Rect {
-            x: word_start_pos,
-            y: y_min,
-            h: y_max - y_min,
-            w: word_end - word_start_pos
-        }
-    });
-    
-    words
+    (0.5 * avg_font_size).min(2.0 * avg(gaps).unwrap_or(0.0)) //2.0 * gaps[gaps.len()/2];
 }
 
 #[cfg(test)]

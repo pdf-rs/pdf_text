@@ -13,15 +13,8 @@ fn main() {
         println!("# page {}", 0 + 1);
         for run in flow.runs {
             for line in run.lines {
-                for w in line.words {
-                    println!("{}", w.text);
-                }
+                println!("{}", line.words.iter().map(|w| w.text.as_str()).format(" "));
             }
         }
-        // for line in flow.lines {
-        //     for w in line.words {
-        //         println!("{}", w.text);
-        //     }
-        // }
     // }
 }

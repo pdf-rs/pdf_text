@@ -14,40 +14,39 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
     // Whether the last processed TextChar is a space
     let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
 
+    let mut word_start_idx = out.len();
+
+    // For calculating the layout(position, width , height) of a word
     let mut word_start_pos = 0.0;
     let mut word_end_pos = 0.0;
-
-    let mut word_start_idx = out.len();
     let mut y_min = f32::INFINITY;
     let mut y_max = -f32::INFINITY;
+
     let mut word_start = true;
 
     for span in items {
         let mut offset = 0; // byte index of last char into span.text
         let tr_inv = span.transform.matrix.inverse();
         let x_off = (tr_inv * span.transform.vector).x();
-        
+       
         let chars = span.chars.as_slice();
         for (i, c) in chars.iter().enumerate() {
             let next_offset = chars.get(i + 1).map_or(span.text.len(), |next| next.offset);
             let s: &str = &span.text[offset..next_offset];
 
             let is_whitespace = s.chars().all(|c| c.is_whitespace());
+            
             if trailing_space {
                 if !is_whitespace {
                     word_start = true;
                     word_start_idx = out.len();
+
+                    out.extend(s.nfkc());
                 }
-                trailing_space = is_whitespace;
-
-                out.extend(s.nfkc());
             } else {
-                trailing_space = is_whitespace;
-                out.extend(s.nfkc());
-
                 if is_whitespace {
                     words.push(Word {
-                        text: out[word_start_idx..out.len()-s.len()].into(),
+                        text: out[word_start_idx..].into(),
                         rect: Rect {
                             x: word_start_pos,
                             y: y_min,
@@ -55,6 +54,8 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
                             w: word_end_pos - word_start_pos
                         }
                     });
+                    out.push_str(" ");
+                    word_start_idx = out.len();
                 } else if c.pos + x_off > end + word_gap {
                     words.push(Word {
                         text: out[word_start_idx..].into(),
@@ -66,12 +67,16 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
                         }
                     });
                     
-                    out.push(' ');
-                    trailing_space = true;
                     word_start = true;
-                    word_start_idx = out.len() - 1;
+                    word_start_idx = out.len();
+
+                    out.extend(s.nfkc());
+                } else {
+                    out.extend(s.nfkc());
                 }
             }
+
+            trailing_space = is_whitespace;
 
             end = c.pos + x_off + c.width;
             word_end_pos = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
@@ -89,7 +94,7 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
             offset = next_offset;
         }
     }
-    
+
     words.push(Word {
         text: out[word_start_idx..].into(),
         rect: Rect {
@@ -107,7 +112,7 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
 /// The most important thing here is to make sure the gap is bigger than char gap, and less than word gap.
 /// 
 /// for example: 
-/// think of something like "ab ____________c de"
+/// think of something like "ab____________c de"
 /// 
 /// a-b has a zero space (or 0.01)
 /// b-c has a huge space of 10

@@ -91,7 +91,14 @@ pub fn exclude_header_and_footer<'a, E: Encoder>(boxes: &'a mut [(RectF, usize)]
 #[derive(Debug)]
 pub enum Node {
     Final { indices: Vec<usize> },
-    Grid { x: Vec<f32>, y: Vec<f32>, cells: Vec<Node>, tag: NodeTag },
+    Grid { 
+        // vertical gaps
+        x: Vec<f32>, 
+        // horizontal gaps
+        y: Vec<f32>, 
+        cells: Vec<Node>,
+        tag: NodeTag 
+    },
     Table { table: table::Table<Vec<usize>> },
 }
 impl Node {
@@ -170,7 +177,7 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         return overlapping_lines(boxes);
     }
 
-    //TODO: Disable the table::split for now,becuase it is not accurate 
+    //TODO: Disable the table::split for now,because it is not accurate 
     // if x_gaps.len() > 1 && y_gaps.len() > 1 {
     //     return table::split(boxes, spans, lines);
     // }

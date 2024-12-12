@@ -91,8 +91,13 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
     match *node {
         Node::Final { ref indices } => {
             if indices.len() > 0 {
-                let node_spans = indices.iter().flat_map(|&i| spans.get(i));
-                let bbox = node_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap();
+                let node_spans = indices.iter()
+                    .flat_map(|&i| spans.get(i));
+                let bbox = node_spans.clone()
+                    .map(|s| s.rect)
+                    .reduce(|a, b| a.union_rect(b))
+                    .unwrap();
+                
                 let class = classify(node_spans.clone());
                 let mut text = String::new();
                 let words = concat_text(&mut text, node_spans);
@@ -111,25 +116,26 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                 NodeTag::Line => {
                     let mut indices = vec![];
                     node.indices(&mut indices);
+
                     let line_spans = indices.iter().flat_map(|&i| spans.get(i));
                     let bbox: RectF = line_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap().into();
 
-                    let mut text = String::new();
-                    let words = concat_text(&mut text, line_spans.clone());
                     let class = classify(line_spans.clone());
+                    let mut text = String::new();
+                    let words = concat_text(&mut text, line_spans);
 
                     let t = match class {
                         Class::Header => RunType::Header,
                         _ => RunType::Paragraph,
                     };
-
                 
                     flow.add_line(words, t);
                 }
                 NodeTag::Paragraph => {
-                    assert_eq!(x.len(), 0);
+                    assert_eq!(x.len(), 0, "For a paragraph x gaps should be empty");
                     let mut lines: Vec<(RectF, usize)> = vec![];
                     let mut indices = vec![];
+
                     for n in cells {
                         let start = indices.len();
                         n.indices(&mut indices);
@@ -142,8 +148,10 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
 
                     let para_spans = indices.iter().flat_map(|&i| spans.get(i));
                     let class = classify(para_spans.clone());
+                    // the bounding box the paragraph
                     let bbox = lines.iter().map(|t| t.0).reduce(|a, b| a.union_rect(b)).unwrap();
                     let line_height = avg(para_spans.map(|s| s.rect.height())).unwrap();
+                    
                     // classify the lines by this vertical line
                     let left_margin = bbox.min_x() + 0.5 * line_height;
 
@@ -158,9 +166,27 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                             left += 1;
                         }
                     }
+                    //typically paragraphs are indented to the right and longer than 2 lines.
+                    //then there will be a higher left count than right count.
+                    
+                    // A paragraph with 3 lines, 3 cases:
+                    // case 1: outdented(right > left, will get 3 runs)
+                    // |-------
+                    // | ----
+                    // | ----
+                    // case 2: indented (left > right, one new run)
+                    // | ------
+                    // |-------
+                    // |-------
+                    // case 3: same x (no indentation, but left > right, right = 0, will be in the same run)
+                    // |------
+                    // |------
+                    // |------
 
-                    // typically paragraphs are indented to the right and longer than 2 lines.
-                    // then there will be a higher left count than right count.
+                    // A paragraph with two lines starts at the same x? then left = right.
+                    // the second line will be treated as as another run, but actually it should be in 
+                    // in the same run.
+
                     let indent = left > right;
 
                     let mut para_start = 0;
@@ -180,9 +206,9 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                                     }
                                 });
                                 para_start = line_start;
-                            } else {
-                                text.push('\n');
                             }
+                            //Always add a line break for new line, which will be treated as whitespace in concat_text method
+                            text.push('\n');
                         }
                         if end > line_start {
                             let words = concat_text(&mut text, indices[line_start..end].iter().flat_map(|&i| spans.get(i)));

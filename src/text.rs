@@ -11,7 +11,12 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
 
     let mut end = 0.; // trailing edge of the last char
 
-    // Whether the last processed TextChar is a space
+    // Whether the last processed TextChar is a whitespace
+    // ' '        Space
+    // '\t'       Tab
+    // '\n'       Line feed
+    // '\r'       Carriage return
+    // '\u{00A0}' Non-breaking space
     let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
 
     let mut word_start_idx = out.len();
@@ -29,10 +34,15 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
         let tr_inv = span.transform.matrix.inverse();
         let x_off = (tr_inv * span.transform.vector).x();
        
-        let chars = span.chars.as_slice();
-        for (i, c) in chars.iter().enumerate() {
-            let next_offset = chars.get(i + 1).map_or(span.text.len(), |next| next.offset);
-            let s: &str = &span.text[offset..next_offset];
+        let mut chars = span.chars.iter().peekable();
+        while let Some(current) = chars.next() {
+            let s;
+            if let Some(next)  = chars.peek() {
+                s = &span.text[offset..next.offset];
+                offset = next.offset;
+            } else {
+                s = &span.text[offset..];
+            }
 
             let is_whitespace = s.chars().all(|c| c.is_whitespace());
             
@@ -56,7 +66,7 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
                     });
                     out.push_str(" ");
                     word_start_idx = out.len();
-                } else if c.pos + x_off > end + word_gap {
+                } else if current.pos + x_off > end + word_gap {
                     words.push(Word {
                         text: out[word_start_idx..].into(),
                         rect: Rect {
@@ -78,20 +88,18 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
 
             trailing_space = is_whitespace;
 
-            end = c.pos + x_off + c.width;
+            end = current.pos + x_off + current.width;
             word_end_pos = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
 
             if word_start {
                 y_min = span.rect.min_y();
                 y_max = span.rect.max_y();
-                word_start_pos = (span.transform.matrix * Vector2F::new(c.pos + x_off, 0.0)).x();
+                word_start_pos = (span.transform.matrix * Vector2F::new(current.pos + x_off, 0.0)).x();
                 word_start = false;
             } else {
                 y_min = y_min.min(span.rect.min_y());
                 y_max = y_max.max(span.rect.max_y());
             }
-
-            offset = next_offset;
         }
     }
 

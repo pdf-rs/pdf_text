@@ -9,141 +9,152 @@ use crate::{flow::{Char, Rect, Word}, util::avg};
 
 pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan<E>> + Clone) -> Vec<Word> {
     let word_gap = analyze_word_gap(items.clone());
-    let mut words: Vec<Word> = vec![];
-
-    let mut end = 0.; // trailing edge of the last char
-
+    let mut words = Vec::new();
+    let mut current_word = WordBuilder::new(out.len());
+    
     // Whether the last processed TextChar is a whitespace
     // ' '        Space
     // '\t'       Tab
     // '\n'       Line feed
     // '\r'       Carriage return
     // '\u{00A0}' Non-breaking space
-    let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
-
-    let mut word_start_idx = out.len();
-
-    // For calculating the layout(position, width , height) of a word
-    let mut word_start_pos = 0.0;
-    let mut word_end_pos = 0.0;
-    let mut y_min = f32::INFINITY;
-    let mut y_max = -f32::INFINITY;
-
-    let mut word_start = true;
-    let mut word_chars = vec![];
-    let mut word_char_idx = 0;
+    let mut trailing_space = out.chars().last().map_or(true, |c| c.is_whitespace());
 
     for span in items {
-        let mut offset = 0; // byte index of last char into span.text
+        let mut offset = 0;
         let tr_inv = span.transform.matrix.inverse();
         let x_off = (tr_inv * span.transform.vector).x();
-       
+        
         let mut chars = span.chars.iter().peekable();
         while let Some(current) = chars.next() {
-            let s;
-            if let Some(next)  = chars.peek() {
-                s = &span.text[offset..next.offset];
+            // Get text for current char
+            let text = if let Some(next) = chars.peek() {
+                let s = &span.text[offset..next.offset];
                 offset = next.offset;
+                s
             } else {
-                s = &span.text[offset..];
-            }
-            end = current.pos + x_off + current.width;
+                &span.text[offset..]
+            };
 
-            let char_start_pos = (span.transform.matrix * Vector2F::new(current.pos + x_off, 0.0)).x();
-            let char_end_pos = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
+            // Calculate char positions
+            let char_start = (span.transform.matrix * Vector2F::new(current.pos + x_off, 0.0)).x();
+            let char_end = (span.transform.matrix * Vector2F::new(current.pos + x_off + current.width, 0.0)).x();
+            
+            let is_whitespace = text.chars().all(|c| c.is_whitespace());
 
-            let is_whitespace = s.chars().all(|c| c.is_whitespace());
-
-            if trailing_space {
-                if !is_whitespace {
-                    word_start = true;
-                    word_start_idx = out.len();
-
-                    word_chars.push(Char {
-                        offset: 0,
-                        pos: char_start_pos,
-                        width: char_end_pos - char_start_pos,
-                    });
-                    out.extend(s.nfkc());
-
-                    word_char_idx += 1;
-                }
-            } else {
+            // Handle word boundaries
+            if trailing_space && !is_whitespace {
+                // Start new word after space
+                current_word.start_new(out.len(), char_start);
+                current_word.add_char(0, char_start, char_end);
+                out.extend(text.nfkc());
+            } else if !trailing_space {
                 if is_whitespace {
-                    words.push(Word {
-                        text: out[word_start_idx..].into(),
-                        rect: Rect {
-                            x: word_start_pos,
-                            y: y_min,
-                            h: y_max - y_min,
-                            w: word_end_pos - word_start_pos
-                        },
-                        chars: take(&mut word_chars)
-                    });
-                    out.push_str(" ");
-                    word_start_idx = out.len();
-                    word_char_idx = 0;
-                } else if current.pos + x_off > end + word_gap {
-                    words.push(Word {
-                        text: out[word_start_idx..].into(),
-                        rect: Rect {
-                            x: word_start_pos,
-                            y: y_min,
-                            h: y_max - y_min,
-                            w: word_end_pos - word_start_pos
-                        },
-                        chars: take(&mut word_chars)
-                    });
-                    
-                    word_start = true;
-                    word_start_idx = out.len();
-                    word_chars.push(Char {
-                        offset: 0,
-                        pos: char_start_pos,
-                        width: char_end_pos - char_start_pos,
-                    });
-                    word_char_idx += 1;
+                    // End word at space
+                    words.push(current_word.build(out, char_end));
+                    current_word = WordBuilder::new(out.len());
+                    out.push(' ');
+                } else if current.pos + x_off > current_word.end_pos + word_gap {
+                    // End word at large gap
+                    words.push(current_word.build(out, char_end));
 
-                    out.extend(s.nfkc());
+                    current_word = WordBuilder::new(out.len());
+                    current_word.start_new(out.len(), char_start);
+                    current_word.add_char(0, char_start, char_end);
+                    out.extend(text.nfkc());
                 } else {
-                    word_chars.push(Char {
-                        offset: word_char_idx,
-                        pos: char_start_pos,
-                        width: char_end_pos - char_start_pos,
-                    });
-
-                    word_char_idx += 1;
-                    out.extend(s.nfkc());
+                    // Continue current word
+                    current_word.add_char(current_word.char_count, char_start, char_end);
+                    out.extend(text.nfkc());
                 }
             }
+
             trailing_space = is_whitespace;
-
-            word_end_pos = char_end_pos;
-
-            if word_start {
-                y_min = span.rect.min_y();
-                y_max = span.rect.max_y();
-                word_start_pos = char_start_pos;
-                word_start = false;
-            } else {
-                y_min = y_min.min(span.rect.min_y());
-                y_max = y_max.max(span.rect.max_y());
-            }
+            current_word.update_bounds(span.rect.min_y(), span.rect.max_y());
         }
     }
 
-    words.push(Word {
-        text: out[word_start_idx..].into(),
-        rect: Rect {
-            x: word_start_pos,
-            y: y_min,
-            h: y_max - y_min,
-            w: word_end_pos - word_start_pos
-        },
-        chars: take(&mut word_chars)
-    });
-  
+    // Add final word if any
+    if !current_word.is_empty() {
+        let end_pos = current_word.end_pos;
+        words.push(current_word.build(out, end_pos));
+    }
+
     words
+}
+
+// Helper struct to build up words
+struct WordBuilder {
+    word_start_idx: usize,
+
+    // For calculating the layout(position, width , height) of a word
+    start_pos: f32,
+    end_pos: f32, // trailing edge of the last char
+    y_min: f32,
+    y_max: f32,
+
+    chars: Vec<Char>,
+    char_count: usize,
+    started: bool,
+}
+
+impl WordBuilder {
+    fn new(word_start_idx: usize) -> Self {
+        Self {
+            word_start_idx,
+            start_pos: 0.0,
+            end_pos: 0.0,
+            y_min: f32::INFINITY,
+            y_max: -f32::INFINITY,
+            chars: Vec::new(),
+            char_count: 0,
+            started: false,
+        }
+    }
+
+    fn start_new(&mut self, word_start_idx: usize, start_pos: f32) {
+        self.word_start_idx = word_start_idx;
+        self.start_pos = start_pos;
+        self.started = true;
+    }
+
+    fn add_char(&mut self, offset: usize, start: f32, end: f32) {
+        self.chars.push(Char {
+            offset,
+            pos: start,
+            width: end - start,
+        });
+        self.end_pos = end;
+        self.char_count += 1;
+    }
+
+    fn update_bounds(&mut self, min_y: f32, max_y: f32) {
+        if !self.started {
+            self.y_min = min_y;
+            self.y_max = max_y;
+            self.started = true;
+        } else {
+            self.y_min = self.y_min.min(min_y);
+            self.y_max = self.y_max.max(max_y);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.chars.is_empty()
+    }
+
+    fn build(mut self, out: &str, end_pos: f32) -> Word {
+        Word {
+            text: out[self.word_start_idx..].into(),
+            rect: Rect {
+                x: self.start_pos,
+                y: self.y_min,
+                h: self.y_max - self.y_min,
+                w: end_pos - self.start_pos
+            },
+            chars: take(&mut self.chars)
+        }
+    }
 }
 
 /// Calculate gaps between each char,

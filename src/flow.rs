@@ -20,7 +20,7 @@ pub struct Word {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Char {
-    pub offset: i32,
+    pub offset: usize,
     pub pos: f32,
     pub width: f32,
 }

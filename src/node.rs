@@ -200,20 +200,10 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         }
     }
 
-    let tag = if y_gaps.len() == 0 {
-        if cells.iter().all(|n| n.tag() <= NodeTag::Line) {
-            NodeTag::Line
-        } else {
-            NodeTag::Complex
-        }
-    } else if x_gaps.len() == 0 {
-        if cells.iter().all(|n| n.tag() <= NodeTag::Line) {
-            NodeTag::Paragraph
-        } else {
-            NodeTag::Complex
-        }
-    } else {
-        NodeTag::Complex
+    let tag = match (y_gaps.is_empty(), x_gaps.is_empty()) {
+        (true, _) if cells.iter().all(|n| n.tag() <= NodeTag::Line) => NodeTag::Line,
+        (_, true) if cells.iter().all(|n| n.tag() <= NodeTag::Line) => NodeTag::Paragraph,
+        _ => NodeTag::Complex
     };
 
     Node::Grid {

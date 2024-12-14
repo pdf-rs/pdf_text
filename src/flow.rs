@@ -268,7 +268,7 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                                 });
                                 para_start = line_start;
                             }
-                            //Always add a line break for new line, which will be treated as whitespace in concat_text method
+                            //Always add a line break for new line, which will be treated as whitespace in the concat_text method
                             text.push('\n');
                         }
                         if end > line_start {

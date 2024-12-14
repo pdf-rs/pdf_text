@@ -1,9 +1,11 @@
+use std::mem::take;
+
 use font::Encoder;
 use pathfinder_geometry::vector::Vector2F;
 use pdf_render::TextSpan;
 use itertools::Itertools;
 use unicode_normalization::UnicodeNormalization;
-use crate::{util::avg, flow::{Word, Rect}};
+use crate::{flow::{Char, Rect, Word}, util::avg};
 
 pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan<E>> + Clone) -> Vec<Word> {
     let word_gap = analyze_word_gap(items.clone());
@@ -28,6 +30,8 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
     let mut y_max = -f32::INFINITY;
 
     let mut word_start = true;
+    let mut word_chars = vec![];
+    let mut word_char_idx = 0;
 
     for span in items {
         let mut offset = 0; // byte index of last char into span.text
@@ -43,15 +47,26 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
             } else {
                 s = &span.text[offset..];
             }
+            end = current.pos + x_off + current.width;
+
+            let char_start_pos = (span.transform.matrix * Vector2F::new(current.pos + x_off, 0.0)).x();
+            let char_end_pos = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
 
             let is_whitespace = s.chars().all(|c| c.is_whitespace());
-            
+
             if trailing_space {
                 if !is_whitespace {
                     word_start = true;
                     word_start_idx = out.len();
 
+                    word_chars.push(Char {
+                        offset: 0,
+                        pos: char_start_pos,
+                        width: char_end_pos - char_start_pos,
+                    });
                     out.extend(s.nfkc());
+
+                    word_char_idx += 1;
                 }
             } else {
                 if is_whitespace {
@@ -62,10 +77,12 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
                             y: y_min,
                             h: y_max - y_min,
                             w: word_end_pos - word_start_pos
-                        }
+                        },
+                        chars: take(&mut word_chars)
                     });
                     out.push_str(" ");
                     word_start_idx = out.len();
+                    word_char_idx = 0;
                 } else if current.pos + x_off > end + word_gap {
                     words.push(Word {
                         text: out[word_start_idx..].into(),
@@ -74,27 +91,39 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
                             y: y_min,
                             h: y_max - y_min,
                             w: word_end_pos - word_start_pos
-                        }
+                        },
+                        chars: take(&mut word_chars)
                     });
                     
                     word_start = true;
                     word_start_idx = out.len();
+                    word_chars.push(Char {
+                        offset: 0,
+                        pos: char_start_pos,
+                        width: char_end_pos - char_start_pos,
+                    });
+                    word_char_idx += 1;
 
                     out.extend(s.nfkc());
                 } else {
+                    word_chars.push(Char {
+                        offset: word_char_idx,
+                        pos: char_start_pos,
+                        width: char_end_pos - char_start_pos,
+                    });
+
+                    word_char_idx += 1;
                     out.extend(s.nfkc());
                 }
             }
-
             trailing_space = is_whitespace;
 
-            end = current.pos + x_off + current.width;
-            word_end_pos = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
+            word_end_pos = char_end_pos;
 
             if word_start {
                 y_min = span.rect.min_y();
                 y_max = span.rect.max_y();
-                word_start_pos = (span.transform.matrix * Vector2F::new(current.pos + x_off, 0.0)).x();
+                word_start_pos = char_start_pos;
                 word_start = false;
             } else {
                 y_min = y_min.min(span.rect.min_y());
@@ -110,7 +139,8 @@ pub fn concat_text<'a, E: Encoder + 'a>(out: &mut String, items: impl Iterator<I
             y: y_min,
             h: y_max - y_min,
             w: word_end_pos - word_start_pos
-        }
+        },
+        chars: take(&mut word_chars)
     });
   
     words

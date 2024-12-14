@@ -12,7 +12,12 @@ fn main() {
 
         for run in flow.runs {
             for line in run.lines {
-                println!("{}", line.words.iter().map(|w| w.text.as_str()).format(" "));
+                for word in line.words {
+                    println!("{}", word.text.as_str());
+                    for char in word.chars {
+                        println!("{:?}", char);
+                    }
+                }
             }
         }
     // }

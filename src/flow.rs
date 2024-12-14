@@ -15,15 +15,31 @@ use table::Table;
 pub struct Word {
     pub text: String,
     pub rect: Rect,
+    pub chars: Vec<Char>
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Char {
+    pub offset: i32,
+    pub pos: f32,
+    pub width: f32,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Line {
     pub words: Vec<Word>,
+    pub rect: Rect,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Run {
     pub lines: Vec<Line>,
     pub kind: RunType,
+}
+
+impl Run {
+    pub fn rect(&self) -> Option<Rect> {
+        self.lines.iter().map(|s| s.rect).reduce(|a, b| a.union(b))
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +71,51 @@ impl From<RectF> for Rect {
     }
 }
 
+impl Rect {
+    pub fn union(self, other: Rect) -> Rect {
+        let min_x = self.x.min(other.x);
+        let min_y = self.y.min(other.y);
+        let max_x = (self.x + self.w).max(other.x + other.w);
+        let max_y = (self.y + self.h).max(other.y + other.h);
+
+        Rect {
+            x: min_x,
+            y: min_y,
+            w: max_x - min_x,
+            h: max_y - min_y
+        }
+    }
+
+    pub fn intersects(self, other: Rect) -> bool {
+        let self_max_x = self.x + self.w;
+        let self_max_y = self.y + self.h;
+        
+        let other_max_x = other.x + other.w;
+        let other_max_y = other.y + other.h;
+
+        self.x < other_max_x && other.x < self_max_x && 
+        self.y < other_max_y && other.y < self_max_y
+    }
+
+    pub fn intersection(self, other: Rect) -> Option<Rect> {
+        if !self.intersects(other) {
+            None
+        } else {
+            let min_x = self.x.max(other.x);
+            let min_y = self.y.max(other.y);
+            let max_x = (self.x + self.w).min(other.x + other.w);
+            let max_y = (self.y + self.h).min(other.y + other.h);
+
+            Some(Rect {
+                x: min_x,
+                y: min_y,
+                w: max_x - min_x,
+                h: max_y - min_y
+            })
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CellContent {
     pub text: String,
@@ -74,11 +135,11 @@ impl Flow {
             runs: vec![]
         }
     }
-    pub fn add_line(&mut self, words: Vec<Word>, kind: RunType) {
+    pub fn add_line(&mut self, words: Vec<Word>, kind: RunType, rect: Rect) {
         if words.len() > 0 {
             self.runs.push(Run {
-                lines: vec![Line { words }], 
-                kind
+                lines: vec![Line { words, rect}], 
+                kind,
             });
         }
     }
@@ -107,7 +168,7 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                     _ => RunType::Paragraph,
                 };
               
-                flow.add_line(words, t);
+                flow.add_line(words, t, bbox.into());
             }
         }
         Node::Grid { ref x, ref y, ref cells, tag } => {
@@ -129,7 +190,7 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                         _ => RunType::Paragraph,
                     };
                 
-                    flow.add_line(words, t);
+                    flow.add_line(words, t, bbox.into());
                 }
                 NodeTag::Paragraph => {
                     assert_eq!(x.len(), 0, "For a paragraph x gaps should be empty");
@@ -203,7 +264,7 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                                     kind: match class {
                                         Class::Header => RunType::Header,
                                         _ => RunType::Paragraph
-                                    }
+                                    },
                                 });
                                 para_start = line_start;
                             }
@@ -214,7 +275,7 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                             let words = concat_text(&mut text, indices[line_start..end].iter().flat_map(|&i| spans.get(i)));
 
                             if words.len() > 0 {
-                                flow_lines.push(Line { words });
+                                flow_lines.push(Line { words , rect: line_bbox.into()});
                             }
                         }
                         if para_start == line_start {

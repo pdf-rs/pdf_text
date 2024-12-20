@@ -201,8 +201,11 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
     }
 
     let tag = match (y_gaps.is_empty(), x_gaps.is_empty()) {
+        // N y gaps, whatever x_gap is, if cells are all lines, then it is a line
         (true, _) if cells.iter().all(|n| n.tag() <= NodeTag::Line) => NodeTag::Line,
+        // N x gaps, whatever y_gap is, if cells are all lines, then it is a paragraph
         (_, true) if cells.iter().all(|n| n.tag() <= NodeTag::Line) => NodeTag::Paragraph,
+        // Otherwise it is a complex node
         _ => NodeTag::Complex
     };
 

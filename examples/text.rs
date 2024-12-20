@@ -14,9 +14,9 @@ fn main() {
             for line in run.lines {
                 for word in line.words {
                     println!("{}", word.text.as_str());
-                    for char in word.chars {
-                        println!("{:?}", char);
-                    }
+                    // for char in word.chars {
+                    //     println!("{:?}", char);
+                    // }
                 }
             }
         }

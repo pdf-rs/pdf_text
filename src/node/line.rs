@@ -94,6 +94,7 @@ pub fn overlapping_lines(boxes: &mut [(RectF, usize)]) -> Node {
     let mut start = 0;
     'a: loop {
         for (i, &(r, _)) in boxes[start..].iter().enumerate() {
+            // Superscript
             if r.center().y() > 0.5 * avg_height + y_center {
                 let end = start + i;
                 sort_x(&mut boxes[start..end]);

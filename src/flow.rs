@@ -124,14 +124,12 @@ pub struct CellContent {
 
 #[derive(Serialize, Deserialize)]
 pub struct Flow {
-    pub lines: Vec<Line>,
     pub runs: Vec<Run>,
 }
 
 impl Flow {
     pub fn new() -> Self {
         Flow { 
-            lines: vec![],
             runs: vec![]
         }
     }
@@ -193,7 +191,8 @@ pub(crate) fn build<E: Encoder>(mut flow: &mut Flow, spans: &[TextSpan<E>], node
                     flow.add_line(words, t, bbox.into());
                 }
                 NodeTag::Paragraph => {
-                    assert_eq!(x.len(), 0, "For a paragraph x gaps should be empty");
+                    assert_eq!(x.len(), 0, "For paragraph x gaps must be empty");
+
                     let mut lines: Vec<(RectF, usize)> = vec![];
                     let mut indices = vec![];
 

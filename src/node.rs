@@ -177,7 +177,7 @@ fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines:
         return overlapping_lines(boxes);
     }
 
-    //TODO: Disable the table::split for now,because it is not accurate 
+    //TODO: Disable the table::split for now, because it is not accurate 
     // if x_gaps.len() > 1 && y_gaps.len() > 1 {
     //     return table::split(boxes, spans, lines);
     // }

@@ -4,57 +4,16 @@ use pdf_render::TextSpan;
 use itertools::Itertools;
 use ordered_float::NotNan;
 use crate::{node::{sort_x, sort_y, NodeTag}, util::avg};
-
 use super::{gap::{dist_y, gaps}, line::Lines, split_by, Node};
 
 pub use table::Table;
 
 pub fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], lines_info: &Lines) -> Node {
-    use std::mem::replace;
-
-    #[derive(Debug)]
-    enum LineTag {
-        Unknown,
-        Text,
-        Table,
-    }
-
     sort_y(boxes);
     let mut lines = vec![];
     let mut y = Span::vert(&boxes[0].0).unwrap();
     let mut items = vec![boxes[0]];
-
-    let build_line = |boxes: &[(RectF, usize)]| -> (LineTag, Span, Vec<(Span, Vec<usize>)>) {
-        let mut line = vec![];
-        let mut x = Span::horiz(&boxes[0].0).unwrap();
-        let mut y = Span::vert(&boxes[0].0).unwrap();
-        let mut items = vec![boxes[0].1];
-
-        for &(rect, i) in &boxes[1..] {
-            y = y.union(Span::vert(&rect).unwrap()).unwrap();
-            let x2 = Span::horiz(&rect).unwrap();
-            if let Some(u) = x.union(x2) {
-                x = u;
-                items.push(i);
-            } else {
-                line.push((x, replace(&mut items, vec![i])));
-                x = x2;
-            }
-        }
-        line.push((x, items));
-
-        let f = avg(boxes.iter().filter_map(|&(_, i)| spans.get(i)).map(|s| s.font_size)).unwrap();
-
-        let max_gap = line.iter().tuple_windows().map(|(l, r)| r.0.start - l.0.end).max();
-        let tag = match max_gap {
-            None => LineTag::Unknown,
-            Some(x) if x.into_inner() < 0.3 * f => LineTag::Text,
-            Some(_) => LineTag::Table,
-        };
-
-        (tag, y, line)
-    };
-
+    
     let mut line = vec![boxes[0]];
     for &(rect, i) in &boxes[1..] {
         let y2 = Span::vert(&rect).unwrap();
@@ -62,14 +21,14 @@ pub fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], li
             y = overlap;
         } else {
             sort_x(&mut line);
-            lines.push(build_line(&line));
+            lines.push(build_line(&line, spans));
             line.clear();
             y = y2
         }
         line.push((rect, i));
     }
     sort_x(&mut line);
-    lines.push(build_line(&line));
+    lines.push(build_line(&line, spans));
 
 
     let mut vparts = vec![];
@@ -168,6 +127,44 @@ pub fn split<E: Encoder>(boxes: &mut [(RectF, usize)], spans: &[TextSpan<E>], li
     }
 }
 
+#[derive(Debug)]
+enum LineTag {
+    Unknown,
+    Text,
+    Table,
+}
+
+fn build_line<E: Encoder>(boxes: &[(RectF, usize)], spans: &[TextSpan<E>]) -> (LineTag, Span, Vec<(Span, Vec<usize>)>) {
+    use std::mem::replace;
+    let mut line = vec![];
+    let mut x = Span::horiz(&boxes[0].0).unwrap();
+    let mut y = Span::vert(&boxes[0].0).unwrap();
+    let mut items = vec![boxes[0].1];
+
+    for &(rect, i) in &boxes[1..] {
+        y = y.union(Span::vert(&rect).unwrap()).unwrap();
+        let x2 = Span::horiz(&rect).unwrap();
+        if let Some(u) = x.union(x2) {
+            x = u;
+            items.push(i);
+        } else {
+            line.push((x, replace(&mut items, vec![i])));
+            x = x2;
+        }
+    }
+    line.push((x, items));
+
+    let avg_font_size = avg(boxes.iter().filter_map(|&(_, i)| spans.get(i)).map(|s| s.font_size)).unwrap();
+
+    let max_gap = line.iter().tuple_windows().map(|(l, r)| r.0.start - l.0.end).max();
+    let tag = match max_gap {
+        None => LineTag::Unknown,
+        Some(x) if x.into_inner() < 0.3 * avg_font_size => LineTag::Text,
+        Some(_) => LineTag::Table,
+    };
+
+    (tag, y, line)
+}
 
 #[derive(Copy, Clone, Debug)]
 struct Span {
@@ -190,6 +187,7 @@ impl Span {
             end: NotNan::new(end).ok()?,
         })
     }
+    // Whether two vertical or horizontal lines overlap, return the intersection.
     fn intersect(self, other: Span) -> Option<Span> {
         if self.start <= other.end && other.start <= self.end {
             Some(Span {
@@ -200,6 +198,7 @@ impl Span {
             None
         }
     }
+
     fn union(self, other: Span) -> Option<Span> {
         if self.start <= other.end && other.start <= self.end {
             Some(Span {

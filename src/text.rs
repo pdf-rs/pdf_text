@@ -1,5 +1,5 @@
 use pathfinder_geometry::vector::Vector2F;
-use pdf_render::TextSpan;
+use crate::Span as TextSpan;
 use itertools::{Itertools};
 use unicode_normalization::UnicodeNormalization;
 use crate::{util::avg, entry::Word, util::Rect};

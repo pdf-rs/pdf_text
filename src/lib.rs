@@ -2,18 +2,30 @@ use std::collections::HashSet;
 
 use entry::Flow;
 use pdf::{backend::Backend, object::{Page, Resolve}, PdfError};
-use pdf_render::{tracer::{TraceCache, Tracer, DrawItem}, Fill, render_pattern, render_page, FillMode};
+use pdf_render::{tracer::{TraceCache, Tracer, DrawItem, NullEncoder}, TextSpan, Fill, render_pattern, render_page, FillMode};
+
+/// The encoder text extraction runs with: none at all.
+///
+/// `pdf_render` builds glyph outlines while it loads fonts; extracting text
+/// needs the metrics and unicode maps but never the paths, so the null
+/// encoder throws the outlines away instead of feeding them into vello/-
+/// pathfinder.
+pub type Encoder = NullEncoder;
+
+/// A span of text as produced by [`run`]. Everything below is written against
+/// this encoder, so callers do not have to name it.
+pub type Span = TextSpan<Encoder>;
 
 mod tree;
-mod util;
+pub mod util;
 mod text;
 pub mod entry;
 
 pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve) -> Result<Flow, PdfError> {
-    let cache = TraceCache::new();
+    let cache: TraceCache<Encoder> = TraceCache::new();
 
     let mut clip_paths = vec![];
-    let mut tracer = Tracer::new(&cache, &mut clip_paths);
+    let mut tracer = Tracer::<Encoder>::new(&cache, &mut clip_paths);
 
     render_page(&mut tracer, resolve, &page, Default::default())?;
 
@@ -36,8 +48,14 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
     let mut lines = vec![];
     let mut visit_item = |item| {
         match item {
-            DrawItem::Text(t, _) if bbox.intersects(t.rect) => {
-                spans.push(t);
+            DrawItem::Text(mut t, _) => {
+                // A span's rect is given in text space (origin on the
+                // baseline, one em high); everything here works in page
+                // coordinates, so place it with the span's own transform.
+                t.rect = t.transform * t.rect;
+                if bbox.intersects(t.rect) {
+                    spans.push(t);
+                }
             }
             DrawItem::Vector(path) if bbox.intersects(path.outline.bounds()) => {
                 for contour in path.outline.contours() {

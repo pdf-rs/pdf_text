@@ -47,7 +47,7 @@ impl From<RectF> for Rect {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CellContent {
     pub text: String,
     pub rect: Rect,

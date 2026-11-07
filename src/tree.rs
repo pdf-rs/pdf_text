@@ -1,4 +1,4 @@
-use pdf_render::TextSpan;
+use crate::Span as TextSpan;
 use pathfinder_geometry::{
     vector::Vector2F,
     rect::RectF
@@ -927,11 +927,12 @@ impl TriCount {
 }
 fn classify<'a>(spans: impl Iterator<Item=&'a TextSpan>) -> Class {
     use pdf_render::FontEntry;
+    use crate::Encoder;
 
     let mut bold = TriCount::new();
     let mut numeric = TriCount::new();
     let mut uniform = TriCount::new();
-    let mut first_font: *const FontEntry = std::ptr::null();
+    let mut first_font: *const FontEntry<Encoder> = std::ptr::null();
 
     for s in spans {
         numeric.add(is_number(&s.text));

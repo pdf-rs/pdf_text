@@ -58,12 +58,12 @@ pub fn build(spans: &[TextSpan], bbox: RectF, lines: &[[f32; 4]]) -> Node {
     sort_y(boxes);
     let (top, bottom) = top_bottom_gap(boxes, bbox);
     if let Some(bottom) = bottom {
-        if probably_footer(&mut boxes[bottom..]) {
+        if bottom > 0 && bottom < boxes.len() && probably_footer(&mut boxes[bottom..]) {
             boxes = &mut boxes[..bottom];
         }
     }
     if let Some(top) = top {
-        if probaby_header(&mut boxes[..top]) {
+        if top > 0 && top < boxes.len() && probaby_header(&mut boxes[..top]) {
             boxes = &mut boxes[top..];
         }
     }
@@ -80,7 +80,378 @@ pub fn build(spans: &[TextSpan], bbox: RectF, lines: &[[f32; 4]]) -> Node {
         }
     }
     let lines = analyze_lines(lines);
+    // A table is a grid of cells, and `split` below reads a page cell by cell:
+    // given a table it hands back its columns, one after the other, as if the
+    // table were read down each column and not across each row. So tables are
+    // found first, and the rest of the page is split around them.
+    sort_y(boxes);
+    let bands = find_tables(boxes, &spans);
+    if !bands.is_empty() {
+        // The widest gaps of the page's prose, which the pieces around the
+        // table are too small to measure for themselves. The table is left
+        // out: its columns are wider than any space in the text, and a piece
+        // measured against them would read its own paragraphs as one.
+        let mut prose: Vec<(RectF, usize)> = boxes.iter()
+            .filter(|b| !bands.iter().any(|band| {
+                let y = baseline(&b.0);
+                y >= band.top && y <= band.bottom
+            }))
+            .cloned()
+            .collect();
+        sort_x(&mut prose);
+        let x = dist_x(&mut prose).map(|g| g.0).unwrap_or(0.0);
+        sort_y(&mut prose);
+        let y = dist_y(&mut prose).map(|g| g.0).unwrap_or(0.0);
+        return build_bands(boxes, &spans, &lines, bands, (x, y));
+    }
     split(boxes, &spans, &lines)
+}
+
+/// The page built with its tables put back together: `split` for everything
+/// between them, `Node::Table` for the tables themselves.
+fn build_bands(
+    boxes: &mut [(RectF, usize)],
+    spans: &[TextSpan],
+    lines: &Lines,
+    bands: Vec<Band>,
+    page: (f32, f32),
+) -> Node {
+    boxes.sort_unstable_by(|a, b| baseline(&a.0).partial_cmp(&baseline(&b.0)).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut cells = vec![];
+    let mut y = vec![];
+    let mut i = 0;
+    for band in bands {
+        let start = i;
+        while i < boxes.len() && baseline(&boxes[i].0) < band.top { i += 1; }
+        if i > start {
+            cells.push(split_within(&mut boxes[start..i], spans, lines, Some(page)));
+            y.push(0.5 * (band.top + baseline(&boxes[i - 1].0)));
+        }
+        while i < boxes.len() && baseline(&boxes[i].0) <= band.bottom { i += 1; }
+        cells.push(Node::Table { table: band.table });
+    }
+    if i < boxes.len() {
+        cells.push(split_within(&mut boxes[i..], spans, lines, Some(page)));
+    }
+    if cells.len() == 1 {
+        return cells.pop().unwrap();
+    }
+    Node::Grid { x: vec![], y, cells, tag: NodeTag::Complex }
+}
+
+// ---------------------------------------------------------------------------
+// Tables
+
+/// A run of consecutive lines that reads as a table, and the table.
+struct Band {
+    /// The baselines the band runs from and to.
+    top: f32,
+    bottom: f32,
+    table: Table<Vec<Vec<usize>>>,
+}
+
+/// One visual line of a page, with its words grouped into cells.
+struct TextLine {
+    cells: Vec<Cell>,
+    /// The line the words are set on.
+    baseline: f32,
+    /// The top and bottom of the line's boxes.
+    y: Span,
+    /// How tall the line is set: the yardstick for the spaces in it.
+    em: f32,
+}
+
+/// The words of a line that stand together: one cell of a table, or a word or
+/// two of prose.
+struct Cell {
+    span: Span,
+    items: Vec<usize>,
+}
+
+/// The line a box of text is set on: the bottom of its box, one em below the
+/// top. Superscripts sit a little above the line, the next line a whole line
+/// below it.
+///
+/// The boxes of `build` are one em tall and stand on their baseline, so two
+/// words share a line exactly when their boxes share a bottom — a tall glyph
+/// in the cell next door does not move it.
+fn baseline(rect: &RectF) -> f32 {
+    rect.max_y()
+}
+
+/// The page as lines of words, top to bottom.
+fn text_lines(boxes: &[(RectF, usize)], spans: &[TextSpan]) -> Vec<TextLine> {
+    let mut order: Vec<usize> = (0..boxes.len())
+        .filter(|&i| boxes[i].0.min_y().is_finite() && boxes[i].0.max_y().is_finite())
+        .collect();
+    order.sort_by(|&a, &b| baseline(&boxes[a].0)
+        .partial_cmp(&baseline(&boxes[b].0))
+        .unwrap_or(std::cmp::Ordering::Equal));
+
+    let em = median(order.iter().map(|&i| boxes[i].0.height()).collect());
+    // A superscript sits a third of an em off the line it belongs to, the next
+    // line is a whole em or more away.
+    let tol = (0.35 * em).max(0.1);
+
+    let mut out = vec![];
+    let mut run: Vec<(RectF, usize)> = vec![];
+    let mut anchor = 0.0;
+    for &i in &order {
+        let b = baseline(&boxes[i].0);
+        if run.is_empty() {
+            anchor = b;
+        } else if (b - anchor).abs() > tol {
+            out.push(make_line(&run, spans, em));
+            run.clear();
+            anchor = b;
+        }
+        run.push(boxes[i]);
+    }
+    if !run.is_empty() {
+        out.push(make_line(&run, spans, em));
+    }
+    out
+}
+
+fn make_line(boxes: &[(RectF, usize)], spans: &[TextSpan], body_em: f32) -> TextLine {
+    let mut boxes = boxes.to_vec();
+    sort_x(&mut boxes);
+
+    // A line that runs into a formula is set in several sizes; its spaces are
+    // still those of the body text around it.
+    let em = median(boxes.iter().map(|b| b.0.height()).collect::<Vec<_>>()).min(1.3 * body_em);
+
+    // Words are separated by a space; the cells of a table by a gap of an em
+    // or more. An em is the yardstick, not the widest space on the line: on a
+    // line of one-word cells every space is a column gap.
+    let threshold = 0.8 * em;
+
+    let mut cells: Vec<Cell> = vec![];
+    let mut span = Span::horiz(&boxes[0].0);
+    let mut items = vec![boxes[0].1];
+    for w in boxes.windows(2) {
+        let gap = w[1].0.min_x() - w[0].0.max_x();
+        let x2 = Span::horiz(&w[1].0);
+        if gap > threshold {
+            if let Some(span) = span {
+                cells.push(Cell { span, items: take(&mut items) });
+            }
+            span = x2;
+        } else {
+            span = match (span, x2) {
+                (Some(a), Some(b)) => Some(Span { start: a.start.min(b.start), end: a.end.max(b.end) }),
+                (a, _) => a,
+            };
+        }
+        items.push(w[1].1);
+    }
+    if let Some(span) = span {
+        cells.push(Cell { span, items });
+    }
+
+    let y = boxes.iter().filter_map(|b| Span::vert(&b.0)).reduce(|a, b| Span {
+        start: a.start.min(b.start),
+        end: a.end.max(b.end),
+    }).unwrap();
+    let baseline = median(boxes.iter().map(|b| baseline(&b.0)).collect());
+
+    let _ = spans;
+    TextLine { cells, baseline, y, em }
+}
+
+fn median(mut v: Vec<f32>) -> f32 {
+    v.retain(|x| x.is_finite());
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    v[v.len() / 2]
+}
+
+/// The distance from one line of a block to the next, in page units.
+fn line_gap(lines: &[TextLine]) -> f32 {
+    let gaps: Vec<f32> = lines.windows(2)
+        .map(|w| w[1].baseline - w[0].baseline)
+        .filter(|g| *g > 0.0)
+        .collect();
+    median(gaps)
+}
+
+/// Every table on the page, in the order the lines come down it.
+fn find_tables(boxes: &[(RectF, usize)], spans: &[TextSpan]) -> Vec<Band> {
+    let lines = text_lines(boxes, spans);
+    let mut bands = vec![];
+    let mut i = 0;
+
+    while i < lines.len() {
+        // A line with one cell is prose — or a cell of a table that has no
+        // neighbour on its row, or one that wrapped. A table is a run of lines
+        // that fall into columns, with lines that do not in between.
+        if lines[i].cells.len() < 2 {
+            i += 1;
+            continue;
+        }
+        let mut last = i;
+        let mut end = i + 1;
+        while end < lines.len() {
+            let line = &lines[end];
+            if line.cells.len() >= 2 {
+                last = end;
+                end += 1;
+                continue;
+            }
+            // A single cell belongs to the table when it stands inside the
+            // columns of the table so far and under the line before it. The
+            // paragraph that follows a table starts at the page's margin, to
+            // the left of every column.
+            let (left, right) = lines[i..=last].iter()
+                .flat_map(|l| l.cells.iter())
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), c| {
+                    (lo.min(c.span.start.into_inner()), hi.max(c.span.end.into_inner()))
+                });
+            let inside = line.cells[0].span.start.into_inner() >= left - 0.5 * line.em
+                && line.cells[0].span.end.into_inner() <= right + 0.5 * line.em;
+            let close = line.baseline - lines[end - 1].baseline < 1.6 * line_gap(&lines[i..=last]).max(line.em);
+            if !(inside && close) {
+                break;
+            }
+            end += 1;
+        }
+
+        if let Some(table) = table_from_lines(&lines[i..=last]) {
+            let em = median(lines[i..=last].iter().map(|l| l.em).collect());
+            bands.push(Band {
+                top: lines[i].baseline - 0.5 * em,
+                bottom: lines[last].baseline + 0.5 * em,
+                table,
+            });
+            i = last + 1;
+        } else {
+            i = last + 1;
+        }
+    }
+    bands
+}
+
+/// Read a block of lines as a table, or say that it is not one.
+fn table_from_lines(lines: &[TextLine]) -> Option<Table<Vec<Vec<usize>>>> {
+    let em = median(lines.iter().map(|l| l.em).collect());
+    if em <= 0.0 {
+        return None;
+    }
+
+    // The columns: the cells, left to right, joined while they touch. A table
+    // has at least two, and one with a dozen is a page laid out in columns.
+    let mut cells: Vec<(Span, usize)> = lines.iter()
+        .enumerate()
+        .flat_map(|(i, l)| l.cells.iter().map(move |c| (c.span, i)))
+        .collect();
+    cells.sort_by_key(|c| c.0.start);
+
+    let mut columns: Vec<Span> = vec![];
+    for &(span, _) in &cells {
+        if let Some(last) = columns.last_mut() {
+            if span.start <= last.end {
+                *last = Span { start: last.start.min(span.start), end: last.end.max(span.end) };
+                continue;
+            }
+        }
+        columns.push(span);
+    }
+    if !(2..=12).contains(&columns.len()) {
+        return None;
+    }
+
+    // The cells of a column start at the same place. Text that merely happens
+    // to have a wide space in it does not: its "columns" wander.
+    let mut lefts: Vec<(f32, f32)> = columns.iter().map(|s| (s.start.into_inner(), s.start.into_inner())).collect();
+    for &(span, _) in &cells {
+        let i = columns.iter().position(|s| s.start <= span.start && span.start <= s.end)
+            .unwrap_or(0);
+        let x = span.start.into_inner();
+        lefts[i] = (lefts[i].0.min(x), lefts[i].1.max(x));
+    }
+    for (i, (lo, hi)) in lefts.iter().enumerate() {
+        let width = columns[i].end.into_inner() - columns[i].start.into_inner();
+        if hi - lo > (2.0 * em).max(0.5 * width) {
+            return None;
+        }
+    }
+    let col = |c: &Cell| {
+        let x = 0.5 * (c.span.start.into_inner() + c.span.end.into_inner());
+        columns.iter().position(|s| s.start.into_inner() <= x && x <= s.end.into_inner())
+            .unwrap_or_else(|| {
+                columns.iter().enumerate()
+                    .min_by(|a, b| {
+                        let d = |s: &Span| (s.start.into_inner() - x).abs();
+                        d(a.1).partial_cmp(&d(b.1)).unwrap()
+                    })
+                    .map(|(i, _)| i)
+                    .unwrap_or(0)
+            })
+    };
+
+    // The rows: a row is started by each line that has something in the
+    // leftmost column; the lines under it fill in the cells that wrapped, and
+    // a line that has nothing there belongs to the row above it.
+    let first_of = |line: &TextLine| line.cells.iter().map(|c| col(c)).min();
+    let mut row_of_line = vec![0usize; lines.len()];
+    let mut rows = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 && first_of(line) == Some(0) {
+            rows += 1;
+        }
+        row_of_line[i] = rows;
+    }
+    let rows = rows + 1;
+
+    let mut table: Table<Vec<Vec<usize>>> = Table::empty(rows as u32, columns.len() as u32);
+    let mut per_row: Vec<Vec<u32>> = vec![vec![]; rows];
+    for (i, line) in lines.iter().enumerate() {
+        let row = row_of_line[i] as u32;
+        for cell in &line.cells {
+            let c = col(cell) as u32;
+            if !per_row[row as usize].contains(&c) {
+                per_row[row as usize].push(c);
+            }
+            // The line below a cell continues it: the same column of the same
+            // row, one line further down.
+            if let Some(v) = table.get_cell_value_mut(row, c) {
+                v.push(cell.items.clone());
+            } else {
+                table.set_cell(vec![cell.items.clone()], row, c, 1, 1);
+            }
+        }
+    }
+
+    // A table is mostly there: every row has something in it, most rows have
+    // more than one cell, and there are cells enough to be worth a table.
+    // Formulae and loose lines fall into columns too, but leave the grid
+    // mostly empty.
+    let mut wide = 0;
+    let mut filled = 0;
+    for row in &per_row {
+        if row.is_empty() {
+            return None;
+        }
+        if row.len() >= 2 {
+            wide += 1;
+        }
+        filled += row.len();
+    }
+    if wide * 2 < rows as usize || filled < 2 * rows as usize || rows < 3 {
+        return None;
+    }
+    // Every column is used by most rows. Poetry and lists are not: a line is
+    // either indented or it is not, so their right-hand "columns" come and go.
+    for c in 0..columns.len() as u32 {
+        let used = per_row.iter().filter(|row| row.contains(&c)).count();
+        if 5 * used < 3 * rows as usize {
+            return None;
+        }
+    }
+    Some(table)
 }
 
 fn analyze_lines(lines: &[[f32; 4]]) -> Lines {
@@ -293,7 +664,7 @@ pub fn split2(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines_info: &Lin
         let d_threshold = avg_vgap.unwrap_or(0.0);
         let mut prev_end = None;
 
-        let mut table: Table<Vec<usize>> = Table::empty(lines.len() as u32, columns.len() as u32);
+        let mut table: Table<Vec<Vec<usize>>> = Table::empty(lines.len() as u32, columns.len() as u32);
 
         let mut row = 0;
         for (_, span, line) in lines {
@@ -321,11 +692,11 @@ pub fn split2(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines_info: &Lin
 
                 if let Some(cell) = combine.then(|| table.get_cell_value_mut(row, first_col as u32)).flatten() {
                     // append to previous line
-                    cell.extend_from_slice(parts);
+                    cell.push(parts.clone());
                 } else {
                     let colspan = (last_col - first_col) as u32 + 1;
                     let rowspan = 1;
-                    table.set_cell(parts.clone(), row, first_col as u32, rowspan, colspan);
+                    table.set_cell(vec![parts.clone()], row, first_col as u32, rowspan, colspan);
                 }
                 col = last_col + 1;
             }
@@ -355,7 +726,7 @@ pub fn split2(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines_info: &Lin
 pub enum Node {
     Final { indices: Vec<usize> },
     Grid { x: Vec<f32>, y: Vec<f32>, cells: Vec<Node>, tag: NodeTag },
-    Table { table: Table<Vec<usize>> },
+    Table { table: Table<Vec<Vec<usize>>> },
 }
 impl Node {
     fn tag(&self) -> NodeTag {
@@ -376,7 +747,7 @@ impl Node {
             Node::Table { ref table } => {
                 out.extend(
                     table.values()
-                        .flat_map(|v| v.value.iter())
+                        .flat_map(|v| v.value.iter().flatten())
                         .cloned()
                 );
             }
@@ -522,23 +893,28 @@ pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32
         }
         Node::Table { ref table } => {
             if let Some(bbox) = table.values()
-                .flat_map(|v| v.value.iter().flat_map(|&i| spans.get(i).map(|s| s.rect)))
+                .flat_map(|v| v.value.iter().flatten().filter_map(|&i| spans.get(i).map(|s| s.rect)))
                 .reduce(|a, b| a.union_rect(b)) {
-                let table = table.flat_map(|indices| {
-                    if indices.len() == 0 {
-                        None
-                    } else {
-                        let line_spans = indices.iter().flat_map(|&i| spans.get(i));
-                        let bbox: RectF = line_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap().into();
-
-                        let mut text = String::new();
-                        concat_text(&mut text, line_spans.clone(), ctx);
-                        Some(CellContent {
-                            text,
-                            rect: bbox.into(),
-                        })
+                let table = table.flat_map(|lines| {
+                    let used: Vec<RectF> = lines.iter().flatten()
+                        .filter_map(|&i| spans.get(i).map(|s| s.rect))
+                        .collect();
+                    let bbox: RectF = used.into_iter().reduce(|a, b| a.union_rect(b))?;
+                    // The lines of a cell are set apart: a word that starts a
+                    // line never stands where the line above it ended.
+                    let mut text = String::new();
+                    for line in lines.iter().filter(|l| !l.is_empty()) {
+                        if !text.is_empty() {
+                            text.push(' ');
+                        }
+                        concat_text(&mut text, line.iter().filter_map(|&i| spans.get(i)), ctx);
                     }
+                    Some(CellContent {
+                        text,
+                        rect: bbox.into(),
+                    })
                 });
+                let _ = bbox;
                 flow.add_table(table);
             }
         }
@@ -609,6 +985,22 @@ fn _render(w: &mut String, spans: &[TextSpan], node: &Node, bbox: RectF, level: 
 }
 
 fn split(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines: &Lines) -> Node {
+    split_within(boxes, spans, lines, None)
+}
+
+/// `split`, but with the widest gaps of the whole page in hand.
+///
+/// A page that holds a table is split above and below it, so that the table is
+/// not read as prose. Those pieces are narrower than the page, and a piece has
+/// smaller gaps in it than the page does; measuring the thresholds on the
+/// piece alone would read a paragraph as a grid. Passing the page's widest
+/// gaps in keeps the thresholds what they would have been on the whole page.
+fn split_within(
+    boxes: &mut [(RectF, usize)],
+    spans: &[TextSpan],
+    lines: &Lines,
+    page: Option<(f32, f32)>,
+) -> Node {
     let num_boxes = boxes.len();
     if num_boxes < 2 {
         return Node::singleton(boxes);
@@ -621,7 +1013,7 @@ fn split(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines: &Lines) -> Nod
 
     let x_y_ratio = 1.0;
 
-    let max_gap = match (max_x_gap, max_y_gap) {
+    let mut max_gap = match (max_x_gap, max_y_gap) {
         (Some((x, _)), Some((y, _))) => x.max(y * x_y_ratio),
         (Some((x, _)), None) => x,
         (None, Some((y, _))) => y * x_y_ratio,
@@ -630,6 +1022,9 @@ fn split(boxes: &mut [(RectF, usize)], spans: &[TextSpan], lines: &Lines) -> Nod
             return Node::singleton(boxes);
         }
     };
+    if let Some((x, y)) = page {
+        max_gap = max_gap.max(x).max(y * x_y_ratio);
+    }
     let x_threshold = (max_gap * 0.5).max(1.0);
     let y_threshold = (max_gap * 0.5 / x_y_ratio).max(0.1);
     let mut cells = vec![];
@@ -1034,10 +1429,15 @@ fn overlapping_lines(boxes: &mut [(RectF, usize)]) -> Node {
 }
 
 fn gap_list<'a>(boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32) + 'a) -> impl Iterator<Item=(f32, f32, usize)> + 'a {
-    let mut boxes = boxes.iter();
-    let &(ref r, _) = boxes.next().unwrap();
-    let (_, mut last_max) = span(r);
-    boxes.enumerate().filter_map(move |(idx, &(ref r, _))| {
+    use itertools::Either;
+    // A page with nothing on the part of it that is being measured has no
+    // gaps; it must not be a panic.
+    let (first, rest) = match boxes.split_first() {
+        Some(pair) => pair,
+        None => return Either::Left(std::iter::empty()),
+    };
+    let (_, mut last_max) = span(&first.0);
+    Either::Right(rest.iter().enumerate().filter_map(move |(idx, &(ref r, _))| {
         let (min, max) = span(&r);
         let r = if min > last_max {
             Some((last_max, min, idx+1))
@@ -1046,14 +1446,17 @@ fn gap_list<'a>(boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32)
         };
         last_max = max.max(last_max);
         r
-    })
+    }))
 }
 
 fn gaps<'a>(threshold: f32, boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32) + 'a) -> impl Iterator<Item=f32> + 'a {
-    let mut boxes = boxes.iter();
-    let &(ref r, _) = boxes.next().unwrap();
-    let (_, mut last_max) = span(r);
-    boxes.filter_map(move |&(ref r, _)| {
+    use itertools::Either;
+    let (first, rest) = match boxes.split_first() {
+        Some(pair) => pair,
+        None => return Either::Left(std::iter::empty()),
+    };
+    let (_, mut last_max) = span(&first.0);
+    Either::Right(rest.iter().filter_map(move |&(ref r, _)| {
         let (min, max) = span(&r);
         let r = if min - last_max >= threshold {
             Some(0.5 * (last_max + min))
@@ -1062,7 +1465,7 @@ fn gaps<'a>(threshold: f32, boxes: &'a [(RectF, usize)], span: impl Fn(&RectF) -
         };
         last_max = max.max(last_max);
         r
-    })
+    }))
 }
 
 fn max_gap(boxes: &[(RectF, usize)], span: impl Fn(&RectF) -> (f32, f32)) -> Option<(f32, f32)> {
@@ -1284,5 +1687,72 @@ mod tests {
     fn a_leaning_page_still_gives_one_line_per_line_of_text() {
         assert_eq!(lines(&flow(&page(0.0))), vec![6; 8]);
         assert_eq!(lines(&flow(&page(1.0f32.to_radians()))), vec![6; 8]);
+    }
+
+    /// A table of four rows and three columns, one word per cell, the columns
+    /// set far enough apart to be columns and not spaces. With `wrapped` the
+    /// cell in the second row, right column, takes two lines.
+    fn table_page(wrapped: bool) -> Vec<TextSpan> {
+        let em = 10.0;
+        let columns = [50.0f32, 130.0, 210.0];
+        let mut spans = vec![];
+        for row in 0..4 {
+            let y = 100.0 + row as f32 * 2.0 * em;
+            for (c, &x) in columns.iter().enumerate() {
+                spans.push(word(&format!("r{}c{}", row, c), x, y, em));
+                if wrapped && row == 1 && c == 2 {
+                    spans.push(word("more", x, y + em, em));
+                }
+            }
+        }
+        spans
+    }
+
+    fn boxes_of(spans: &[TextSpan]) -> Vec<(RectF, usize)> {
+        let mut boxes: Vec<(RectF, usize)> = spans.iter().enumerate().map(|(i, s)| (s.rect, i)).collect();
+        sort_y(&mut boxes);
+        boxes
+    }
+
+    #[test]
+    fn a_grid_of_cells_is_found_as_a_table() {
+        let spans = table_page(false);
+        let bands = find_tables(&boxes_of(&spans), &spans);
+        assert_eq!(bands.len(), 1);
+        assert_eq!(bands[0].table.size(), (4, 3));
+    }
+
+    /// A cell that wraps onto a second line is one cell with two lines in it,
+    /// not a new row with nothing in the other columns.
+    #[test]
+    fn a_wrapped_cell_stays_one_cell() {
+        let spans = table_page(true);
+        let bands = find_tables(&boxes_of(&spans), &spans);
+        assert_eq!(bands.len(), 1);
+        assert_eq!(bands[0].table.size(), (4, 3));
+        let cell = bands[0].table.values().find(|c| c.row == 1 && c.col == 2).unwrap();
+        assert_eq!(cell.value.len(), 2);
+    }
+
+    /// Prose is not a table, however wide its spaces.
+    #[test]
+    fn a_paragraph_is_not_a_table() {
+        let spans = page(0.0);
+        assert!(find_tables(&boxes_of(&spans), &spans).is_empty());
+    }
+
+    /// A table reaches the flow as a table, rows by rows.
+    #[test]
+    fn a_table_is_read_across_its_rows() {
+        let marked = flow(&table_page(false));
+        let table = marked.runs.iter().find_map(|r| match &r.kind {
+            RunType::Table(t) => Some(t),
+            _ => None,
+        }).expect("no table");
+        assert_eq!((table.rows.len(), table.columns), (4, 3));
+        let text = |r: usize, c: usize| table.rows[r][c].as_ref().map(|c| c.text.clone()).unwrap_or_default();
+        assert_eq!(text(0, 0), "r0c0");
+        assert_eq!(text(0, 2), "r0c2");
+        assert_eq!(text(3, 2), "r3c2");
     }
 }

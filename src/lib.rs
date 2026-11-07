@@ -38,9 +38,29 @@ pub fn run_with_stats<B: Backend>(
     document: &mut text::Stats,
 ) -> Result<Flow, PdfError> {
     let cache: TraceCache<Encoder> = TraceCache::new();
+    run_cached(file, page, resolve, document, &cache)
+}
 
+/// A [`TraceCache`] to share between the pages of one document.
+///
+/// Loading a font is by far the most expensive part of extracting a page
+/// (seven times the cost of running the page's content stream itself), and
+/// the cache is what makes it happen once per font instead of once per page:
+/// pass the same cache to [`run_cached`] for every page of a file.
+pub fn new_trace_cache() -> TraceCache<Encoder> {
+    TraceCache::new()
+}
+
+/// Like [`run_with_stats`], with a font cache shared across the document.
+pub fn run_cached<B: Backend>(
+    file: &pdf::file::CachedFile<B>,
+    page: &Page,
+    resolve: &impl Resolve,
+    document: &mut text::Stats,
+    cache: &TraceCache<Encoder>,
+) -> Result<Flow, PdfError> {
     let mut clip_paths = vec![];
-    let mut tracer = Tracer::<Encoder>::new(&cache, &mut clip_paths);
+    let mut tracer = Tracer::<Encoder>::new(cache, &mut clip_paths);
 
     render_page(&mut tracer, resolve, &page, Default::default())?;
 

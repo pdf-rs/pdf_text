@@ -19,6 +19,33 @@ fn text_of(flow: &pdf_text::entry::Flow) -> String {
         .join(" ")
 }
 
+/// A `TraceCache` shared between pages must not change the text: it caches
+/// fonts (and, in other encoders, glyph outlines) per font, not per page, and
+/// that is what turns 756 font loads into a handful.
+#[test]
+fn a_shared_font_cache_gives_the_same_text() {
+    fonts();
+    let path = std::env::var("PDF")
+        .unwrap_or_else(|_| "/home/hematite/task-clones/pdf/files/libreoffice.pdf".into());
+    let file = FileOptions::cached().open(&path).unwrap();
+    let resolver = file.resolver();
+
+    let mut apart = vec![];
+    for page in file.pages().take(3) {
+        let page = page.unwrap();
+        apart.push(text_of(&pdf_text::run(&file, &page, &resolver).unwrap()));
+    }
+
+    let cache = pdf_text::new_trace_cache();
+    for (i, page) in file.pages().take(3).enumerate() {
+        let page = page.unwrap();
+        // A fresh Stats per page, so only the cache is being shared.
+        let mut document = pdf_text::text::Stats::new();
+        let flow = pdf_text::run_cached(&file, &page, &resolver, &mut document, &cache).unwrap();
+        assert_eq!(text_of(&flow), apart[i], "page {}", i + 1);
+    }
+}
+
 /// Every page must produce a span placed in page coordinates: a span's own
 /// rect is in text space, so without the transform it lands at the origin and
 /// the page comes out empty.

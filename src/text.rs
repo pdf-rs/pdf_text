@@ -53,15 +53,19 @@ pub fn concat_text<'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan>
                 trailing_space = is_whitespace;
             }
             if !trailing_space && c.pos + x_off > end + space_gap {
-                words.push(Word {
-                    text: out[word_start_idx..].into(),
-                    rect: Rect {
-                        x: word_start_pos,
-                        y: y_min,
-                        h: y_max - y_min,
-                        w: word_end - word_start_pos
-                    }
-                });
+                // A span boundary can leave nothing but the space itself
+                // behind; a whitespace-only "word" is not one.
+                if !out[word_start_idx..].trim().is_empty() {
+                    words.push(Word {
+                        text: out[word_start_idx..].into(),
+                        rect: Rect {
+                            x: word_start_pos,
+                            y: y_min,
+                            h: y_max - y_min,
+                            w: word_end - word_start_pos
+                        }
+                    });
+                }
                 
                 out.push(' ');
                 trailing_space = true;
@@ -86,17 +90,24 @@ pub fn concat_text<'a>(out: &mut String, items: impl Iterator<Item=&'a TextSpan>
         }
         trailing_space = span.text[pos..].chars().all(|c| c.is_whitespace());
 
-        out.extend(span.text[pos..].nfkc());
-    }
-    words.push(Word {
-        text: out[word_start_idx..].into(),
-        rect: Rect {
-            x: word_start_pos,
-            y: y_min,
-            h: y_max - y_min,
-            w: word_end - word_start_pos
+        // The last character of the span is never appended inside the loop
+        // above; append it now — but do not stack a second space when one text
+        // run ends with a space glyph and the next one *is* a space glyph.
+        if !(trailing_space && out.chars().last().map(|c| c.is_whitespace()).unwrap_or(false)) {
+            out.extend(span.text[pos..].nfkc());
         }
-    });
-    
+    }
+    if !out[word_start_idx..].trim().is_empty() {
+        words.push(Word {
+            text: out[word_start_idx..].into(),
+            rect: Rect {
+                x: word_start_pos,
+                y: y_min,
+                h: y_max - y_min,
+                w: word_end - word_start_pos
+            }
+        });
+    }
+
     words
 }

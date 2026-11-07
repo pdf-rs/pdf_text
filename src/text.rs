@@ -35,6 +35,45 @@ const MIN_UPPER_SHARE: f32 = 0.04;
 /// one space glyph, wider than any kern and narrower than any word gap.
 pub const FALLBACK_SPACE_EM: f32 = 0.25;
 
+/// Where a span's text space sits on the page, and how long an em is there.
+///
+/// Gaps have to be measured in page units, not in text-space units: two runs
+/// of one line may be drawn at different text-space scales (one puts its size
+/// in `Tf`, the next scales the text matrix instead), and a gap measured in
+/// text space would read them as though they were one size.
+#[derive(Clone, Copy)]
+struct Placement {
+    /// page units per text-space unit, along the baseline
+    scale: f32,
+    /// page position of text-space x = 0, measured along the baseline
+    origin: f32,
+    /// one em in page units
+    em: f32,
+}
+
+impl Placement {
+    fn new(span: &TextSpan) -> Self {
+        let t = span.transform;
+        let zero = t * Vector2F::new(0.0, 0.0);
+        let unit = t * Vector2F::new(1.0, 0.0) - zero;
+        let scale = unit.length();
+        if scale > 0.0 && scale.is_finite() {
+            let d = unit * (1.0 / scale);
+            let em = if span.font_size > 0.0 { span.font_size * scale } else { scale };
+            Placement { scale, origin: zero.x() * d.x() + zero.y() * d.y(), em }
+        } else {
+            // A degenerate transform (a text matrix scaled to nothing): stay
+            // in text space, where the span was written.
+            Placement { scale: 1.0, origin: 0.0, em: span.font_size.max(f32::MIN_POSITIVE) }
+        }
+    }
+
+    /// The page position of text-space `x`, measured along the baseline.
+    fn x(&self, x: f32) -> f32 {
+        self.origin + x * self.scale
+    }
+}
+
 /// A histogram of the gaps between the ink of consecutive glyphs, in em, plus
 /// the font sizes seen along the way.
 ///
@@ -65,11 +104,10 @@ impl Stats {
     /// Add the glyph gaps of one block of text: the spans of a line, of a
     /// paragraph, or of a page, in reading order.
     pub fn observe<'a>(&mut self, items: impl Iterator<Item = &'a TextSpan> + Clone) {
-        let mut prev: Option<(f32, f32, f32)> = None; // (left, right, font size)
+        let mut prev: Option<(f32, f32, f32)> = None; // (left, right, em) in page units
 
         for span in items {
-            let tr_inv = span.transform.matrix.inverse();
-            let x_off = (tr_inv * span.transform.vector).x();
+            let p = Placement::new(span);
             if span.font_size > 0.0 {
                 self.font_sizes.push(span.font_size);
             }
@@ -80,20 +118,20 @@ impl Stats {
                 if span.text[c.offset..].chars().next().map(char::is_whitespace).unwrap_or(false) {
                     continue;
                 }
-                let left = c.pos + x_off;
-                let right = left + c.width;
+                let left = p.x(c.pos);
+                let right = left + c.width * p.scale;
 
-                if let Some((prev_left, prev_right, prev_size)) = prev {
+                if let Some((prev_left, prev_right, prev_em)) = prev {
                     // Skip anything that goes backwards: the next line, a
                     // second column, a superscript.
                     if left > prev_left {
-                        let size = 0.5 * (prev_size + span.font_size);
-                        if size > 0.0 {
-                            self.add_gap((left - prev_right) / size);
+                        let em = 0.5 * (prev_em + p.em);
+                        if em > 0.0 {
+                            self.add_gap((left - prev_right) / em);
                         }
                     }
                 }
-                prev = Some((left, right, span.font_size));
+                prev = Some((left, right, p.em));
             }
         }
     }
@@ -244,8 +282,8 @@ pub fn concat_text<'a>(
     block.observe(items.clone());
     let space_em = context.space_em(&block);
 
-    let mut end = 0.; // trailing edge of the last char
-    let mut end_size = 0.; // font size of the last char
+    let mut end = 0.; // trailing edge of the last char, page units
+    let mut end_em = 0.; // em of the last char, page units
     let mut trailing_space = out.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
     let mut word_start_pos = 0.0;
     let mut word_start_idx = out.len();
@@ -256,8 +294,7 @@ pub fn concat_text<'a>(
 
     for span in items {
         let mut pos = 0; // byte index of last char into span.text
-        let tr_inv = span.transform.matrix.inverse();
-        let x_off = (tr_inv * span.transform.vector).x();
+        let place = Placement::new(span);
         for c in span.chars.iter() {
             let s = &span.text[pos..c.offset];
             if c.offset > 0 {
@@ -267,8 +304,8 @@ pub fn concat_text<'a>(
                 }
                 trailing_space = is_whitespace;
             }
-            let gap = c.pos + x_off - end;
-            let size = if end_size > 0.0 { 0.5 * (end_size + span.font_size) } else { span.font_size };
+            let gap = place.x(c.pos) - end;
+            let size = if end_em > 0.0 { 0.5 * (end_em + place.em) } else { place.em };
             if !trailing_space && size > 0.0 && gap > space_em * size {
                 // A span boundary can leave nothing but the space itself
                 // behind; a whitespace-only "word" is not one.
@@ -290,16 +327,17 @@ pub fn concat_text<'a>(
                 word_start_idx = out.len();
             }
             pos = c.offset;
-            end = c.pos + x_off + c.width;
-            end_size = span.font_size;
+            let end_t = c.pos + c.width;
+            end = place.x(end_t);
+            end_em = place.em;
             if c.offset == 0 || !trailing_space {
-                word_end = (span.transform.matrix * Vector2F::new(end, 0.0)).x();
+                word_end = place.x(end_t);
             }
 
             if word_start {
                 y_min = span.rect.min_y();
                 y_max = span.rect.max_y();
-                word_start_pos = (span.transform.matrix * Vector2F::new(c.pos + x_off, 0.0)).x();
+                word_start_pos = place.x(c.pos);
                 word_start = false;
             } else {
                 y_min = y_min.min(span.rect.min_y());
@@ -344,6 +382,14 @@ mod tests {
     /// white space between them and *no space glyphs at all*, which is how
     /// justified text is usually drawn: the gap is all there is.
     fn run(words: &[&str], gap: f32, size: f32, x: f32) -> Span {
+        run_at(words, gap, size, 1.0, x)
+    }
+
+    /// The same run, but with the size split between `Tf` and the text
+    /// matrix: `size` in text space, `scale` on the way to the page. One way
+    /// or the other, `size * scale` is the em on the page and `x` the page
+    /// position of the run's first glyph.
+    fn run_at(words: &[&str], gap: f32, size: f32, scale: f32, x: f32) -> Span {
         let mut text = String::new();
         let mut chars = vec![];
         let mut pen = 0.0f32;
@@ -373,7 +419,8 @@ mod tests {
             chars,
             color: Fill::black(),
             alpha: 1.0,
-            transform: Transform2F::from_translation(vec2f(x, 600.0)),
+            transform: Transform2F::from_scale(vec2f(scale, scale))
+                * Transform2F::from_translation(vec2f(x / scale, 600.0)),
             mode: TextMode::Fill,
             op_nr: 0,
             bytes: vec![],
@@ -403,6 +450,23 @@ mod tests {
     fn wide_justified_gaps_are_still_word_gaps() {
         let line = vec![run(&["a", "b", "c", "d", "e", "f", "g"], 0.9, 10.0, 0.0)];
         assert_eq!(words(&line, Context::default()), ["a", "b", "c", "d", "e", "f", "g"]);
+    }
+
+    /// One line may be drawn in runs that put the size in different places:
+    /// this one writes `1 Tf` and scales the text matrix by ten, the next one
+    /// writes `10 Tf`. On the page they are the same size, so the words have
+    /// to come out as they would from a single run. Measured in text space,
+    /// the second run's glyphs look ten times smaller than they are.
+    #[test]
+    fn runs_at_different_text_space_scales_are_measured_on_the_page() {
+        let a = run_at(&["alpha", "beta", "gamma"], 0.3, 1.0, 10.0, 0.0);
+        let a_width = a.rect.width() * 10.0;
+        let b = run_at(&["delta", "epsilon"], 0.3, 10.0, 1.0, a_width + 3.0);
+        let line = vec![a, b];
+        assert_eq!(
+            words(&line, Context::default()),
+            ["alpha", "beta", "gamma", "delta", "epsilon"]
+        );
     }
 
     /// Two letters that kern apart are not two words.

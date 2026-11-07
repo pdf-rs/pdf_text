@@ -13,7 +13,7 @@ use itertools::{Itertools};
 use ordered_float::NotNan;
 use crate::entry::{Flow, Line, Run, RunType, Word};
 use crate::util::{is_number, avg, CellContent};
-use crate::text::{concat_text};
+use crate::text::{concat_text, Context};
 use std::mem::take;
 use table::Table;
 
@@ -383,7 +383,7 @@ pub enum NodeTag {
     Complex,
 }
 
-pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32) {
+pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32, ctx: Context) {
     match *node {
         Node::Final { ref indices } => {
             if indices.len() > 0 {
@@ -391,7 +391,7 @@ pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32
                 let bbox = node_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap();
                 let class = classify(node_spans.clone());
                 let mut text = String::new();
-                let words = concat_text(&mut text, node_spans);
+                let words = concat_text(&mut text, node_spans, ctx);
                 
                 let t = match class {
                     Class::Header => RunType::Header,
@@ -410,7 +410,7 @@ pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32
                     let bbox: RectF = line_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap().into();
 
                     let mut text = String::new();
-                    let words = concat_text(&mut text, line_spans.clone());
+                    let words = concat_text(&mut text, line_spans.clone(), ctx);
                     let class = classify(line_spans.clone());
 
                     let t = match class {
@@ -478,7 +478,7 @@ pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32
                             }
                         }
                         if end > line_start {
-                            let words = concat_text(&mut text, indices[line_start..end].iter().flat_map(|&i| spans.get(i)));
+                            let words = concat_text(&mut text, indices[line_start..end].iter().flat_map(|&i| spans.get(i)), ctx);
 
                             if words.len() > 0 {
                                 flow_lines.push(Line { words });
@@ -503,7 +503,7 @@ pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32
                 NodeTag::Complex => {
                     let x_anchors = once(x_anchor).chain(x.iter().cloned()).cycle();
                     for (node, x) in cells.iter().zip(x_anchors) {
-                        items(flow, spans, node, x);
+                        items(flow, spans, node, x, ctx);
                     }
                 }
             }
@@ -520,7 +520,7 @@ pub fn items(mut flow: &mut Flow, spans: &[TextSpan], node: &Node, x_anchor: f32
                         let bbox: RectF = line_spans.clone().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap().into();
 
                         let mut text = String::new();
-                        concat_text(&mut text, line_spans.clone());
+                        concat_text(&mut text, line_spans.clone(), ctx);
                         Some(CellContent {
                             text,
                             rect: bbox.into(),

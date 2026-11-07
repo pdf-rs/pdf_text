@@ -18,10 +18,25 @@ pub type Span = TextSpan<Encoder>;
 
 mod tree;
 pub mod util;
-mod text;
+pub mod text;
 pub mod entry;
 
 pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &impl Resolve) -> Result<Flow, PdfError> {
+    let mut document = text::Stats::new();
+    run_with_stats(file, page, resolve, &mut document)
+}
+
+/// Like [`run`], but keeps statistics about how the text of a document is
+/// spaced. Pass the same [`text::Stats`] for every page of one file: at first
+/// a page measures its own spacing, and as pages accumulate the document's
+/// spacing becomes available to pages that hold too little text to tell
+/// (a cover, a page that is one heading plus a figure).
+pub fn run_with_stats<B: Backend>(
+    file: &pdf::file::CachedFile<B>,
+    page: &Page,
+    resolve: &impl Resolve,
+    document: &mut text::Stats,
+) -> Result<Flow, PdfError> {
     let cache: TraceCache<Encoder> = TraceCache::new();
 
     let mut clip_paths = vec![];
@@ -99,8 +114,14 @@ pub fn run<B: Backend>(file: &pdf::file::CachedFile<B>, page: &Page, resolve: &i
         visit_item(item);
     }
 
+    // Measure this page's spacing before the spans are consumed.
+    let mut page_stats = text::Stats::new();
+    page_stats.observe(spans.iter());
+
     let root = tree::build(&spans, bbox, &lines);
     let mut flow = Flow::new();
-    tree::items(&mut flow, &spans, &root, bbox.min_x());
+    let ctx = text::Context::new(Some(&page_stats), Some(&*document));
+    tree::items(&mut flow, &spans, &root, bbox.min_x(), ctx);
+    document.merge(&page_stats);
     Ok(flow)
 }

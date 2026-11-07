@@ -24,7 +24,19 @@ pub fn build(spans: &[TextSpan], bbox: RectF, lines: &[[f32; 4]]) -> Node {
 
     let mut boxes: Vec<(RectF, usize)> = spans.iter().enumerate().map(|(i, t)| (t.rect, i)).collect();
     let mut boxes = boxes.as_mut_slice();
-    
+
+    // A page that was scanned a little askew: turn it straight before anything
+    // is measured on it. Everything below compares `min_y` and rect centers,
+    // and on a page that leans by half a degree those comparisons see the
+    // drift, not the lines.
+    let skew = page_skew(spans);
+    // Below a twentieth of a degree there is nothing to straighten: the angle
+    // is the noise of the measurement, and turning a page by noise only moves
+    // every comparison in this file by a hair.
+    if skew.abs() >= 0.001 {
+        rotate(&mut boxes, bbox, skew);
+    }
+
     let avg_font_size = avg(spans.iter().map(|s| s.font_size)).unwrap();
     let probaby_header = |boxes: &[(RectF, usize)]| {
         let class = classify(boxes.iter().filter_map(|&(_, i)| spans.get(i)));
@@ -764,6 +776,221 @@ fn sort_x(boxes: &mut [(RectF, usize)]) {
 fn sort_y(boxes: &mut [(RectF, usize)]) {
     boxes.sort_unstable_by(|a, b| a.0.min_y().partial_cmp(&b.0.min_y()).unwrap());
 }
+
+/// One line of text as it is found on a page: the two ends of the words seen
+/// on it so far, and in which direction it runs once two words say so.
+#[derive(Clone, Copy)]
+struct Baseline {
+    first: Vector2F,
+    last: Vector2F,
+    dir: Option<Vector2F>,
+    words: usize,
+    em: f32,
+}
+
+/// The angle, in radians, at which the text of a page runs.
+///
+/// A scanned page is almost never exactly straight, and half a degree is
+/// enough to matter to everything in this file: it compares `min_y` and rect
+/// centers, so a line that drifts by a fraction of an em from word to word
+/// looks like a new line every few words, columns lean, and the boxes the gap
+/// splitter finds do not line up.
+///
+/// The angle is measured by following the words in the order they come down
+/// the page. Each word joins the line it sits on — the line whose direction it
+/// is closest to — and the first two words of a line give that line its
+/// direction, which every further word refines: the direction is always the
+/// one from the line's first word to its latest, so a page of long lines says
+/// far more than a page of short ones. The page's angle is the median of the
+/// line angles, weighted by how far each line reaches, so that a caption
+/// printed straight, or a few words along a slanted arrow, cannot outvote the
+/// body text.
+///
+/// Only lines set in the page's dominant font size are counted (a chart's
+/// labels are not the body), only pages with several full lines of them are
+/// believed, and only when those lines agree; and an angle of more than twenty
+/// degrees is not a skew at all but a page set the other way round, which is
+/// the caller's business, not ours. Otherwise there is no answer: the page is
+/// straight, and zero is the right angle for it.
+fn page_skew(spans: &[TextSpan]) -> f32 {
+    if spans.len() < 6 {
+        return 0.0;
+    }
+
+    // Where each span starts, and how tall its em is, from its text matrix:
+    // the rect of a span cannot be used for this, because its bottom edge is
+    // pulled down by whatever descenders the text happens to have.
+    let mut items: Vec<(Vector2F, f32)> = spans.iter()
+        .filter_map(|s| {
+            let t = s.transform;
+            let p = t * Vector2F::zero();
+            let unit = t * Vector2F::new(1.0, 0.0) - p;
+            let scale = unit.length();
+            let em = if s.font_size > 0.0 { s.font_size * scale } else { scale };
+            if !(em > 0.0) || !em.is_finite() || !p.x().is_finite() || !p.y().is_finite() {
+                return None;
+            }
+            Some((p, em))
+        })
+        .collect();
+    items.sort_unstable_by(|a, b| a.0.y().partial_cmp(&b.0.y()).unwrap());
+
+    let mut open: Vec<Baseline> = vec![];
+    for &(p, em) in items.iter() {
+        let tol = (0.25 * em).max(0.05);
+
+        let mut best: Option<(usize, f32)> = None;
+        for (i, b) in open.iter().enumerate() {
+            let d = match b.dir {
+                Some(d) => {
+                    let v = p - b.first;
+                    (v.x() * d.y() - v.y() * d.x()).abs()
+                }
+                // One word has no direction: compare the baselines.
+                None => (p.y() - b.first.y()).abs(),
+            };
+            if d <= tol && best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((i, d));
+            }
+        }
+
+        match best {
+            Some((i, _)) => {
+                let b = &mut open[i];
+                b.words += 1;
+                b.em = b.em.max(em);
+                // A superscript or a subscript sits a little above or below
+                // the baseline of the words around it; letting it move the
+                // ends of a line tilts the whole page.
+                let body = em >= 0.8 * b.em;
+                if !body {
+                    continue;
+                }
+                match b.dir {
+                    // The second word gives the line a direction. Words do not
+                    // arrive left to right — a page sorted by `min_y` hands a
+                    // leaning line its words from the top down, which on a line
+                    // that rises to the right is right to left — so the two
+                    // ends are put in order by x, and the direction is always
+                    // the one text is read in.
+                    None => {
+                        if p.x() < b.first.x() {
+                            b.last = b.first;
+                            b.first = p;
+                        } else {
+                            b.last = p;
+                        }
+                        let v = b.last - b.first;
+                        let len = v.length();
+                        if len > 0.0 {
+                            b.dir = Some(v * (1.0 / len));
+                        }
+                    }
+                    Some(d) => {
+                        // Extend whichever end the word is beyond; a word
+                        // between the ends says nothing about the direction.
+                        let v = p - b.first;
+                        let along = v.x() * d.x() + v.y() * d.y();
+                        let reach = (b.last - b.first).length();
+                        let extended = if along < 0.0 {
+                            b.first = p;
+                            true
+                        } else if along > reach {
+                            b.last = p;
+                            true
+                        } else {
+                            false
+                        };
+                        if extended {
+                            let v = b.last - b.first;
+                            let len = v.length();
+                            if len > 0.0 {
+                                b.dir = Some(v * (1.0 / len));
+                            }
+                        }
+                    }
+                }
+            }
+            None => open.push(Baseline { first: p, last: p, dir: None, words: 1, em }),
+        }
+    }
+
+    // The body text is what says how the page is turned; a chart's tick
+    // labels, set smaller and at whatever angle the chart happened to use,
+    // only add noise. So the lines that count are the ones set in the page's
+    // dominant font size.
+    let mut ems: Vec<f32> = open.iter().filter(|b| b.words >= 2).map(|b| b.em).collect();
+    if ems.is_empty() {
+        return 0.0;
+    }
+    ems.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    let body_em = ems[ems.len() / 2];
+
+    let mut angles: Vec<(f32, f32)> = open.iter()
+        .filter(|b| b.words >= 4 && b.em >= 0.85 * body_em)
+        .filter_map(|b| {
+            let d = b.dir?;
+            let reach = (b.last - b.first).length();
+            let a = d.y().atan2(d.x());
+            if a.is_finite() && a.abs() < 0.35 { Some((a, reach)) } else { None }
+        })
+        .collect();
+
+    // A handful of short lines cannot tell a page's angle: an index, a
+    // caption, a chart's labels. Two or three full lines can.
+    if angles.len() < 6 {
+        return 0.0;
+    }
+    angles.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    let total: f32 = angles.iter().map(|&(_, w)| w).sum();
+    if !(total > 600.0) {
+        return 0.0;
+    }
+    let mut acc = 0.0;
+    let mut median = 0.0;
+    for &(a, w) in angles.iter() {
+        acc += w;
+        if acc >= 0.5 * total {
+            median = a;
+            break;
+        }
+    }
+
+    // Only a page whose lines agree is askew. A page of figures has labels at
+    // every angle, and the middle of those angles is not a skew; it is a
+    // coincidence.
+    let agree: f32 = angles.iter()
+        .filter(|&&(a, _)| (a - median).abs() <= 0.02)
+        .map(|&(_, w)| w)
+        .sum();
+    if agree < 0.7 * total {
+        return 0.0;
+    }
+    median
+}
+
+/// Turn a point by `-skew` around the centre of `bbox`, so that a line running
+/// at `skew` comes out horizontal.
+fn turn(p: Vector2F, bbox: RectF, skew: f32) -> (f32, f32) {
+    let (s, c) = skew.sin_cos();
+    let v = p - bbox.center();
+    (bbox.center().x() + c * v.x() + s * v.y(),
+     bbox.center().y() - s * v.x() + c * v.y())
+}
+
+/// Turn every box by `-skew`, keeping each one's bounding rectangle.
+fn rotate(boxes: &mut [(RectF, usize)], bbox: RectF, skew: f32) {
+    for &mut (ref mut r, _) in boxes.iter_mut() {
+        let (x0, y0) = turn(Vector2F::new(r.min_x(), r.min_y()), bbox, skew);
+        let (x1, y1) = turn(Vector2F::new(r.max_x(), r.min_y()), bbox, skew);
+        let (x2, y2) = turn(Vector2F::new(r.min_x(), r.max_y()), bbox, skew);
+        let (x3, y3) = turn(Vector2F::new(r.max_x(), r.max_y()), bbox, skew);
+        *r = RectF::from_points(
+            Vector2F::new(x0.min(x1).min(x2).min(x3), y0.min(y1).min(y2).min(y3)),
+            Vector2F::new(x0.max(x1).max(x2).max(x3), y0.max(y1).max(y2).max(y3)),
+        );
+    }
+}
 fn overlapping_lines(boxes: &mut [(RectF, usize)]) -> Node {
     sort_y(boxes);
     let avg_height = avg(boxes.iter().map(|(r, _)| r.height())).unwrap();
@@ -955,5 +1182,107 @@ fn classify<'a>(spans: impl Iterator<Item=&'a TextSpan>) -> Class {
         (_, Tri::False, _) => Class::Paragraph,
         (_, Tri::Maybe(_), _) => Class::Paragraph,
         _ => Class::Mixed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdf::content::TextMode;
+    use pathfinder_geometry::transform2d::Transform2F;
+    use pathfinder_geometry::vector::vec2f;
+    use pdf_render::{Fill, TextChar};
+    use crate::text::Context;
+
+    /// One word of four letters, `em` high, starting at `x, y` on the page.
+    /// The text matrix only moves it there; the size is in `Tf`, as it is in
+    /// most real files.
+    fn word(text: &str, x: f32, y: f32, em: f32) -> TextSpan {
+        let mut chars = vec![];
+        let mut body = String::new();
+        let mut pen = 0.0f32;
+        for ch in text.chars() {
+            chars.push(TextChar {
+                offset: body.len(),
+                pos: pen,
+                width: 0.65 * em,
+                idx: chars.len(),
+                leading_space: 0.0,
+            });
+            body.push(ch);
+            pen += 0.65 * em;
+        }
+        TextSpan {
+            rect: RectF::from_points(vec2f(x, y - em), vec2f(x + pen, y)),
+            width: pen,
+            font_size: em,
+            font: None,
+            text: body,
+            chars,
+            color: Fill::black(),
+            alpha: 1.0,
+            transform: Transform2F::from_translation(vec2f(x, y)),
+            mode: TextMode::Fill,
+            op_nr: 0,
+            bytes: vec![],
+        }
+    }
+
+    /// A page of eight lines of six words, each line running at `skew`
+    /// radians — 0.0 being a page that is perfectly straight.
+    fn page(skew: f32) -> Vec<TextSpan> {
+        let em = 10.0;
+        let mut spans = vec![];
+        for line in 0..8 {
+            let y = 100.0 + line as f32 * 2.0 * em;
+            for w in 0..6 {
+                let x = 50.0 + w as f32 * 2.8 * em;
+                spans.push(word("word", x, y + (x - 50.0) * skew.tan(), em));
+            }
+        }
+        spans
+    }
+
+    /// The flow the tree builder makes of a page, as the printout sees it.
+    fn flow(spans: &[TextSpan]) -> Flow {
+        let bbox = spans.iter().map(|s| s.rect).reduce(|a, b| a.union_rect(b)).unwrap();
+        let node = build(spans, bbox, &[]);
+        let mut flow = Flow::new();
+        items(&mut flow, spans, &node, bbox.min_x(), Context::default());
+        flow
+    }
+
+    fn lines(flow: &Flow) -> Vec<usize> {
+        flow.runs.iter().flat_map(|r| r.lines.iter()).map(|l| l.words.len()).collect()
+    }
+
+    #[test]
+    fn a_leaning_page_is_measured_by_its_own_lines() {
+        let skew = 1.0f32.to_radians();
+        let measured = page_skew(&page(skew));
+        assert!(
+            (measured - skew).abs() < 0.002,
+            "{:.4} rad measured for a page set at {:.4}",
+            measured, skew
+        );
+    }
+
+    #[test]
+    fn a_straight_page_is_left_alone() {
+        assert_eq!(page_skew(&page(0.0)), 0.0);
+    }
+
+    #[test]
+    fn a_single_line_cannot_tell_the_angle_of_a_page() {
+        let spans: Vec<_> = (0..6).map(|w| word("word", 50.0 + w as f32 * 28.0, 100.0, 10.0)).collect();
+        assert_eq!(page_skew(&spans), 0.0);
+    }
+
+    /// The point of measuring the angle: a page that leans by a degree still
+    /// comes out as eight lines of six words, not as a heap of short ones.
+    #[test]
+    fn a_leaning_page_still_gives_one_line_per_line_of_text() {
+        assert_eq!(lines(&flow(&page(0.0))), vec![6; 8]);
+        assert_eq!(lines(&flow(&page(1.0f32.to_radians()))), vec![6; 8]);
     }
 }

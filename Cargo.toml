@@ -10,9 +10,15 @@ description = "PDF text extraction"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-pdf = { git = "https://github.com/pdf-rs/pdf", features = ["cache"] }
-pdf_render = { path = "/home/hematite/task-clones/pdf_render/render" }
-font = { git = "https://github.com/pdf-rs/font", branch = "vello", features = ["cff"] }
+# Sebastian's forks, fetched over ssh (Seb, 2026-11-08: "publish pdf2md and
+# reference via ssh link"). They were paths into the sibling checkouts before,
+# which nothing else could resolve: cargo reads this manifest, so a path that
+# exists only on one machine makes the crate unusable as a dependency.
+pdf = { git = "ssh://git@github.com/s3bk/pdf.git", branch = "master", features = ["cache"] }
+pdf_render = { git = "ssh://git@github.com/s3bk/pdf_render.git", branch = "vello" }
+# Pinned to the rev `pdf_render` names: the `vello` branch of font has moved
+# past what either crate compiles against.
+font = { git = "https://github.com/pdf-rs/font", rev = "d7b579afd94c983af6e0f218e13d4095209b9be2", features = ["cff"] }
 itertools = "*"
 log = "*"
 ordered-float = "*"
@@ -23,12 +29,3 @@ pathfinder_geometry = { git = "https://github.com/servo/pathfinder" }
 pathfinder_color = { git = "https://github.com/servo/pathfinder" }
 pathfinder_content = { git = "https://github.com/servo/pathfinder" }
 table = { git = "https://github.com/s3bk/table", features = ["serde"] }
-
-# Local checkouts of the sibling crates (see /home/hematite/task-clones). The
-# upstream pdf_render master has not caught up with the pdf API yet; the local
-# branch has.
-[patch."https://github.com/pdf-rs/pdf"]
-pdf = { path = "/home/hematite/task-clones/pdf/pdf" }
-
-[patch."https://github.com/pdf-rs/pdf_render"]
-pdf_render = { path = "/home/hematite/task-clones/pdf_render/render" }

@@ -16,9 +16,9 @@ description = "PDF text extraction"
 # exists only on one machine makes the crate unusable as a dependency.
 pdf = { git = "ssh://git@github.com/s3bk/pdf.git", branch = "master", features = ["cache"] }
 pdf_render = { git = "ssh://git@github.com/s3bk/pdf_render.git", branch = "vello" }
-# Pinned to the rev `pdf_render` names: the `vello` branch of font has moved
-# past what either crate compiles against.
-font = { git = "https://github.com/pdf-rs/font", rev = "f3368198ada8f8888f009261322d7125c43d4c5c", features = ["cff"] }
+# Pinned to the rev `pdf_render` names, so the two cannot resolve different
+# copies of `font`.
+font = { git = "https://github.com/pdf-rs/font", rev = "032f427839837c6e1fac7333bd4039d3482d17a7", features = ["cff"] }
 itertools = "*"
 log = "*"
 ordered-float = "*"
